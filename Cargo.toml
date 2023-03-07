@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 bitfield = "0.14.0"
+bitintr = "0.3.0"
