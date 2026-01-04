@@ -1,15 +1,16 @@
-﻿use gbemu_rust::cpu::Cpu;
+﻿extern crate sdl2;
+use gbemu_rust::cpu::Cpu;
+use gbemu_rust::joypad::JoypadButton;
 use gbemu_rust::memory::Memory;
-use gbemu_rust::joypad::{Joypad, JoypadButton};
+use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::time::{Duration, Instant};
-use std::env;
 
-extern crate sdl2;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::PixelFormatEnum;
+use sdl2::rect::Rect;
 
 const SCREEN_WIDTH: u32 = 160;
 const SCREEN_HEIGHT: u32 = 144;
@@ -32,22 +33,22 @@ fn map_keycode_to_button(keycode: Keycode) -> Option<JoypadButton> {
 }
 
 fn main() {
-    // Enable backtrace for debugging
     std::env::set_var("RUST_BACKTRACE", "1");
 
-    // Choose ROM path: first CLI arg or default to CPU instr test ROM
     let args: Vec<String> = env::args().collect();
     let rom_path = if args.len() > 1 {
         args[1].clone()
     } else {
-        String::from("roms/test_roms/cpu_instrs.gb")
+        String::from("roms/roms/tetris.gb")
     };
 
     println!("Loading ROM: {}", rom_path);
 
     // Initialize SDL2
     let sdl_context = sdl2::init().expect("Failed to initialize SDL2");
-    let video_subsystem = sdl_context.video().expect("Failed to initialize video subsystem");
+    let video_subsystem = sdl_context
+        .video()
+        .expect("Failed to initialize video subsystem");
 
     // Create a window
     let window = video_subsystem
@@ -57,7 +58,10 @@ fn main() {
         .expect("Failed to create window");
 
     // Create a canvas
-    let mut canvas = window.into_canvas().build().expect("Failed to create canvas");
+    let mut canvas = window
+        .into_canvas()
+        .build()
+        .expect("Failed to create canvas");
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(PixelFormatEnum::RGB24, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -66,7 +70,9 @@ fn main() {
     // Load ROM
     let mut rom_file = File::open(&rom_path).expect("Failed to open ROM file");
     let mut rom_buffer = Vec::new();
-    rom_file.read_to_end(&mut rom_buffer).expect("Failed to read ROM file");
+    rom_file
+        .read_to_end(&mut rom_buffer)
+        .expect("Failed to read ROM file");
 
     // Initialize emulator components
     let mut mem = Memory::new(rom_buffer.clone());
@@ -80,11 +86,12 @@ fn main() {
     cpu.registers.write_16("hl", 0x014D);
     cpu.registers.write_16("sp", 0xFFFE);
     cpu.registers.write_16("pc", 0x0100);
-
-    let mut joypad = Joypad::new();
+    cpu.registers.ime = 1; // Interrupts enabled after boot ROM
 
     // Main emulation loop
-    let mut event_pump = sdl_context.event_pump().expect("Failed to get SDL event pump");
+    let mut event_pump = sdl_context
+        .event_pump()
+        .expect("Failed to get SDL event pump");
     let mut frame_count = 0;
     let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
     let mut last_frame = Instant::now();
@@ -97,21 +104,18 @@ fn main() {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
-                Event::KeyDown { keycode: Some(key), .. } => {
+                Event::KeyDown {
+                    keycode: Some(key), ..
+                } => {
                     if let Some(button) = map_keycode_to_button(key) {
-                        joypad.press_button(button);
-                        mem.write_8(0xFF00, joypad.read());
-                        if joypad.interrupt_requested {
-                            let current_if = mem.read_8(0xFF0F);
-                            mem.write_8(0xFF0F, current_if | 0x10);
-                            joypad.clear_interrupt();
-                        }
+                        mem.joypad.press_button(button);
                     }
                 }
-                Event::KeyUp { keycode: Some(key), .. } => {
+                Event::KeyUp {
+                    keycode: Some(key), ..
+                } => {
                     if let Some(button) = map_keycode_to_button(key) {
-                        joypad.release_button(button);
-                        mem.write_8(0xFF00, joypad.read());
+                        mem.joypad.release_button(button);
                     }
                 }
                 _ => {}
@@ -121,11 +125,21 @@ fn main() {
         // Run CPU cycles for one frame
         let mut cycles = 0u32;
         while cycles < 70224 {
-            let c = cpu.step(&mut mem);
-            cycles += c;
+            let delta_cycles = cpu.step(&mut mem);
+            cycles += delta_cycles;
             // Step PPU and Timer incrementally as in tests
-            mem.ppu.step(c);
-            mem.timer.tick(c as u16);
+            mem.ppu.step(delta_cycles);
+            mem.timer.tick(delta_cycles as u16);
+            // Progress OAM DMA timing: decrement remaining cycles and clear active when done
+            if mem.dma_active {
+                if delta_cycles >= mem.dma_cycles_remaining as u32 {
+                    mem.dma_cycles_remaining = 0;
+                    mem.dma_active = false;
+                } else {
+                    mem.dma_cycles_remaining =
+                        mem.dma_cycles_remaining.wrapping_sub(delta_cycles as u16);
+                }
+            }
             cpu.handle_interrupts(&mut mem);
 
             // Forward serial output as it arrives
@@ -139,11 +153,17 @@ fn main() {
 
         // Update texture with framebuffer
         let framebuffer = &mem.ppu.framebuffer;
-        texture.update(None, framebuffer, (SCREEN_WIDTH * 3) as usize).expect("Failed to update texture");
+        texture
+            .update(None, framebuffer, (SCREEN_WIDTH * 3) as usize)
+            .expect("Failed to update texture");
 
         // Render to screen
         canvas.clear();
-        canvas.copy(&texture, None, None).expect("Failed to copy texture");
+        // Scale texture to window size so it's visible
+        let dst_rect = Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+        canvas
+            .copy(&texture, None, Some(dst_rect))
+            .expect("Failed to copy texture");
         canvas.present();
 
         // Frame timing
@@ -152,15 +172,6 @@ fn main() {
             std::thread::sleep(frame_duration - frame_time);
         }
         last_frame = Instant::now();
-
         frame_count += 1;
-
-        // Debug: print PC and serial status every 60 frames (approx 1s)
-        if frame_count % 60 == 0 {
-            let pc = cpu.registers.read_16("pc");
-            let sp = cpu.registers.read_16("sp");
-            let serial_len = mem.serial.get_output_string().len();
-            println!("Frame {}: PC=0x{:04X}, SP=0x{:04X}, SerialLen={}", frame_count, pc, sp, serial_len);
-        }
     }
 }

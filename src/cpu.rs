@@ -1,5 +1,7 @@
 ﻿use crate::memory::Memory;
 
+pub static mut DEBUG_PC: u16 = 0;
+
 pub struct Cpu {
     pub registers: Registers,
     pub cycles: u64,
@@ -196,6 +198,7 @@ impl Cpu {
         }
 
         let pc = self.registers.read_16("pc");
+        unsafe { DEBUG_PC = pc; }
         let opcode = mem.read_8(pc);
 
         // Check for stuck state and log PC progress
@@ -1749,54 +1752,78 @@ impl Cpu {
 
     // Handle interrupts - should be called after each instruction
     pub fn handle_interrupts(&mut self, mem: &mut Memory) {
-        // First, check peripheral interrupt flags and update IF register
-        // This happens REGARDLESS of IME state
+        // --- 1. SYNC HARDWARE FLAGS TO IF REGISTER (0xFF0F) ---
 
-        // Check VBlank interrupt from PPU
+        let mut request_flags = 0;
+
+        // VBlank (Bit 0)
         if mem.ppu.vblank_interrupt {
-            let current_if = mem.read_8(0xFF0F);
-            mem.write_8(0xFF0F, current_if | 0x01);  // Set VBlank interrupt flag (bit 0)
-            mem.ppu.vblank_interrupt = false;  // Clear the PPU's internal flag
+            request_flags |= 0x01;
+            mem.ppu.vblank_interrupt = false; // Clear source
         }
 
-        // Check timer interrupt from timer module
+        // LCD STAT (Bit 1) - (Assuming you implement this in PPU later)
+        // if mem.ppu.stat_interrupt { request_flags |= 0x02; ... }
+
+        // Timer (Bit 2)
         if mem.timer.interrupt_pending {
-            let current_if = mem.read_8(0xFF0F);
-            mem.write_8(0xFF0F, current_if | 0x04);  // Set timer interrupt flag
-            mem.timer.interrupt_pending = false;  // Clear timer's internal flag
+            request_flags |= 0x04;
+            mem.timer.interrupt_pending = false; // Clear source
         }
 
-        // Check serial interrupt from serial module
+        // Serial (Bit 3)
         if mem.serial.interrupt_pending {
-            let current_if = mem.read_8(0xFF0F);
-            mem.write_8(0xFF0F, current_if | 0x08);  // Set serial interrupt flag
-            mem.serial.interrupt_pending = false;  // Clear serial's internal flag
+            request_flags |= 0x08;
+            mem.serial.interrupt_pending = false; // Clear source
         }
 
-        // Now check if we should actually SERVICE the interrupts
-        // This only happens if IME is enabled
+        // Joypad (Bit 4)
+        if mem.joypad.interrupt_requested {
+            request_flags |= 0x10;
+            mem.joypad.clear_interrupt(); // Clear source
+        }
+
+        // Write to IF register (0xFF0F)
+        if request_flags != 0 {
+            let current_if = mem.read_8(0xFF0F);
+            mem.write_8(0xFF0F, current_if | request_flags);
+        }
+
+        // --- 2. SERVICE INTERRUPTS ---
+
+        if self.registers.ime == 0 && !self.halted {
+            return;
+        }
+
+        // Read IE (Enabled) and IF (Request)
+        let ie = mem.read_8(0xFFFF);
+        let if_reg = mem.read_8(0xFF0F);
+        let pending = ie & if_reg;
+
+        // HALT BUG: If CPU is Halted, IME=0, and interrupt is pending,
+        // the CPU wakes up but often encounters the "HALT bug" (PC fails to increment).
+        if self.halted && pending != 0 {
+            self.halted = false;
+        }
+
+        // If IME is disabled, we don't actually jump to the handler
         if self.registers.ime == 0 {
             return;
         }
 
-        // Read interrupt enable and interrupt flag registers
-        let ie = mem.read_8(0xFFFF);  // Interrupt Enable
-        let if_reg = mem.read_8(0xFF0F);  // Interrupt Flag
-        let pending = ie & if_reg;
-
         if pending == 0 {
-            return;  // No pending interrupts
+            return;
         }
 
-        // Priority order: VBlank (bit 0) > LCD (bit 1) > Timer (bit 2) > Serial (bit 3) > Joypad (bit 4)
+        // Service highest priority interrupt
+        // Priority: VBlank(0) > Stat(1) > Timer(2) > Serial(3) > Joypad(4)
         for i in 0..5 {
             if pending & (1 << i) != 0 {
                 self.service_interrupt(mem, i);
-                break;  // Handle highest priority interrupt only
+                return; // Only service one interrupt per step
             }
         }
     }
-
     // Service an interrupt
     fn service_interrupt(&mut self, mem: &mut Memory, interrupt: u8) {
         // Cancel halted state if CPU was halted

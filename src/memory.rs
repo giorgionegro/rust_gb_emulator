@@ -2,6 +2,7 @@
 use crate::timer::Timer;
 use crate::serial::Serial;
 use crate::ppu::Ppu;
+use crate::joypad::Joypad;
 
 type MainMemory = [u8; 0x10000];
 
@@ -19,7 +20,13 @@ pub struct Memory {
     pub timer: Timer,
     pub serial: Serial,
     pub ppu: Ppu,
-    pub joypad_state: u8,
+    pub joypad: Joypad,
+    // OAM DMA state
+    pub dma_active: bool,
+    pub dma_cycles_remaining: u16,
+    pub dma_source: u16,
+    // When true, `write_8` will not trigger side-effects (used during init/reset)
+    pub suppress_io_side_effects: bool,
 }
 
 impl Memory {
@@ -35,7 +42,11 @@ impl Memory {
             timer: Timer::new(),
             serial: Serial::new(),
             ppu: Ppu::new(),
-            joypad_state: 0xCF, // Initial joypad state
+            joypad: Joypad::new(),
+            dma_active: false,
+            dma_cycles_remaining: 0,
+            dma_source: 0,
+            suppress_io_side_effects: false,
         };
 
         // Copy the ROM buffer into the memory's ROM
@@ -58,7 +69,7 @@ const RBN: u16 = 0x2000;
 impl Memory {
     pub fn read_8(&self, address: u16) -> u8 {
         let value = if address == 0xFF00 {
-            self.joypad_state
+            self.joypad.read()
         } else if (0xFF04..=0xFF07).contains(&address) {
             self.timer.read(address)
         } else if (0xFF01..=0xFF02).contains(&address) {
@@ -75,19 +86,6 @@ impl Memory {
             let bank = if self.current_rom_bank == 0 { 1 } else { self.current_rom_bank };
             let offset = (bank as usize) * 0x4000 + (address as usize - 0x4000);
 
-            // Debug ROM banking
-            if address == 0x4000 || address == 0x7FFF {
-                let debug_info = format!(
-                    "ROM_BANK_ACCESS: addr=0x{:04X} bank={} offset=0x{:06X} value=0x{:02X}\n",
-                    address, bank, offset, self.rom.buffer.get(offset).unwrap_or(&0xFF)
-                );
-                use std::fs::OpenOptions;
-                use std::io::Write;
-                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("rom_banking.txt") {
-                    let _ = file.write_all(debug_info.as_bytes());
-                }
-            }
-
             if offset < self.rom.buffer.len() {
                 self.rom.buffer[offset]
             } else {
@@ -96,23 +94,6 @@ impl Memory {
         } else {
             self.main_memory[address as usize]
         };
-
-        // Log suspicious memory accesses
-        if address >= 0x8000 && address < 0xA000 {
-            // VRAM access - log occasionally
-            static mut VRAM_LOG_COUNTER: u32 = 0;
-            unsafe {
-                VRAM_LOG_COUNTER += 1;
-                if VRAM_LOG_COUNTER % 100 == 0 {
-                    let debug_info = format!("VRAM_READ: addr=0x{:04X} value=0x{:02X}\n", address, value);
-                    use std::fs::OpenOptions;
-                    use std::io::Write;
-                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("vram_access.txt") {
-                        let _ = file.write_all(debug_info.as_bytes());
-                    }
-                }
-            }
-        }
 
         value
     }
@@ -135,54 +116,57 @@ impl Memory {
     }
 
     pub fn write_8(&mut self, address: u16, value: u8) {
-        // Log ROM banking writes
-        if address >= 0x2000 && address <= 0x3FFF {
-            let debug_info = format!(
-                "ROM_BANK_SWITCH: addr=0x{:04X} value=0x{:02X} old_bank={} new_bank={}\n",
-                address, value, self.current_rom_bank, value & BANK_MASK
-            );
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("rom_banking.txt") {
-                let _ = file.write_all(debug_info.as_bytes());
+        // If IO side effects are suppressed (e.g., during post-boot memcpy),
+        // just write the byte to main memory and return without triggering
+        // peripheral/PPU/serial logic.
+        if self.suppress_io_side_effects {
+            self.main_memory[address as usize] = value;
+            return;
+        }
+
+        // OAM DMA trigger (write to 0xFF46)
+        if address == 0xFF46 {
+            let source = (value as u16) << 8;
+            self.dma_active = true;
+            // DMA takes 160 * 4 machine cycles on DMG (approx 640 cycles)
+            self.dma_cycles_remaining = 160 * 4;
+            self.dma_source = source;
+
+            // Immediate copy of 160 bytes into OAM (FE00..FE9F)
+            for i in 0..160u16 {
+                let v = self.read_8(source + i);
+                self.ppu.oam[i as usize] = v;
             }
+
+
+            // Also write the value to IO register if code expects to read it
+            self.main_memory[address as usize] = value;
+            return;
         }
 
         if address == 0xFF00 {
-            // Only bits 4-5 are writable (button group select)
-            self.joypad_state = (self.joypad_state & 0x0F) | (value & 0x30);
+            self.joypad.write(value);
             return;
         } else if (0xFF04..=0xFF07).contains(&address) {
             self.timer.write(address, value);
             return;
         } else if (0xFF01..=0xFF02).contains(&address) {
             self.serial.write(address, value);
+          
             return;
         } else if (0xFF40..=0xFF4B).contains(&address) {
-            // Log LCD register writes
-            let debug_info = format!("LCD_REG_WRITE: addr=0x{:04X} value=0x{:02X}\n", address, value);
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("lcd_debug.txt") {
-                let _ = file.write_all(debug_info.as_bytes());
-            }
             self.ppu.write(address, value);
             return;
         } else if (0x8000..=0x9FFF).contains(&address) {
-            // Debug VRAM writes - important for seeing when tile data is loaded
-            static mut VRAM_WRITE_COUNT: u32 = 0;
-            unsafe {
-                VRAM_WRITE_COUNT += 1;
-                if VRAM_WRITE_COUNT <= 10 || VRAM_WRITE_COUNT % 100 == 0 {
-                    // println!("VRAM_WRITE #{}: addr=0x{:04X} value=0x{:02X}", VRAM_WRITE_COUNT, address, value);
-                    if VRAM_WRITE_COUNT == 1 {
-                        // println!("VRAM: First write detected! Game is loading graphics data.");
-                    }
-                }
+            if self.dma_active {
+                return;
             }
             self.ppu.vram[(address - 0x8000) as usize] = value;
             return;
         } else if (0xFE00..=0xFE9F).contains(&address) {
+            if self.dma_active {
+                return;
+            }
             self.ppu.oam[(address - 0xFE00) as usize] = value;
             return;
         } else if address < 0x8000 {
@@ -190,6 +174,8 @@ impl Memory {
             self.write_to_rom_register(address, value);
             return;
         }
+
+
 
         // Default: write to main memory
         self.main_memory[address as usize] = value;
@@ -214,59 +200,44 @@ impl Memory {
     }
 
     pub fn init_post_boot_state(&mut self) {
-        // Timer registers
-        self.write_8(0xFF05, 0x00); // TIMA
-        self.write_8(0xFF06, 0x00); // TMA
-        self.write_8(0xFF07, 0x00); // TAC
-        self.write_8(0xFF04, 0x00); // DIV
+        // Initialize IO registers from the canonical post-boot table
+        // IO_RESET maps to 0xFF00..0xFFFF
+        // Suppress IO side-effects while copying the canonical IO reset table
+        // (this mirrors the behavior of a memcpy in the original C code)
+        self.suppress_io_side_effects = true;
+        for i in 0..0x100u16 {
+            let addr = 0xFF00u16.wrapping_add(i);
+            let value = IO_RESET[i as usize];
+            // Directly copy into main memory while side-effects are suppressed
+            self.write_8(addr, value);
+        }
+        self.suppress_io_side_effects = false;
 
-        // Sound registers (initialize to common post-boot values)
-        self.write_8(0xFF10, 0x80); // NR10
-        self.write_8(0xFF11, 0xBF); // NR11
-        self.write_8(0xFF12, 0xF3); // NR12
-        self.write_8(0xFF14, 0xBF); // NR14
-        self.write_8(0xFF16, 0x3F); // NR21
-        self.write_8(0xFF17, 0x00); // NR22
-        self.write_8(0xFF19, 0xBF); // NR24
-        self.write_8(0xFF1A, 0x7F); // NR30
-        self.write_8(0xFF1B, 0xFF); // NR31
-        self.write_8(0xFF1C, 0x9F); // NR32
-        self.write_8(0xFF1E, 0xBF); // NR34
-        self.write_8(0xFF20, 0xFF); // NR41
-        self.write_8(0xFF21, 0x00); // NR42
-        self.write_8(0xFF22, 0x00); // NR43
-        self.write_8(0xFF23, 0xBF); // NR44
-        self.write_8(0xFF24, 0x77); // NR50
-        self.write_8(0xFF25, 0xF3); // NR51
-        self.write_8(0xFF26, 0xF1); // NR52 (sound on, all channels enabled)
-
-        // LCD registers (DMG post-boot defaults)
-        self.write_8(0xFF40, 0x91); // LCDC: LCD on, BG on, tiles from 0x8000, tilemap 0x9800
-        self.write_8(0xFF41, 0x85); // STAT
-        self.write_8(0xFF42, 0x00); // SCY
-        self.write_8(0xFF43, 0x00); // SCX
-        self.write_8(0xFF44, 0x00); // LY
-        self.write_8(0xFF45, 0x00); // LYC
-        self.write_8(0xFF47, 0xFC); // BGP (11 11 11 00 - darkest to lightest)
-        self.write_8(0xFF48, 0xFF); // OBP0
-        self.write_8(0xFF49, 0xFF); // OBP1
-        self.write_8(0xFF4A, 0x00); // WY
-        self.write_8(0xFF4B, 0x00); // WX
-
-        // Interrupt flags / enable
-        self.write_8(0xFF0F, 0xE1); // IF (boot ROM leaves VBlank flag set)
-        self.write_8(0xFFFF, 0x00); // IE (interrupts disabled initially)
-
-        // Serial transfer registers
-        self.write_8(0xFF01, 0x00); // SB
-        self.write_8(0xFF02, 0x7E); // SC
-
-        // HRAM initialization - common patterns from real boot ROM
-        // Many games poll specific HRAM addresses during initialization
-        self.main_memory[0xFFFF] = 0x00; // IE (already written above via write_8)
-
-        // Some games expect certain HRAM bytes to be non-zero after boot
-        // This is a safe default that matches real DMG behavior
-        self.main_memory[0xFF50] = 0x01; // Boot ROM disable register (boot finished)
+        // Ensure the Joypad internal register reflects the copied IO_RESET value at 0xFF00
+        let joypad_init = self.main_memory[0xFF00];
+        self.joypad.set_register_raw(joypad_init);
+        // Ensure boot-disable (FF50) is set to 1 to indicate boot ROM finished
+        self.main_memory[0xFF50] = 0x01;
     }
 }
+
+// IO register post-boot defaults (maps to 0xFF00..0xFFFF)
+static IO_RESET: [u8; 0x100] = [
+    0xCF, 0x00, 0x7C, 0xFF, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01,
+    0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
+    0xFF, 0x00, 0x00, 0xBF, 0x77, 0xF3, 0xF1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+    0x91, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x7E, 0xFF, 0xFE,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3E, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC0, 0xFF, 0xC1, 0x00, 0xFE, 0xFF, 0xFF, 0xFF,
+    0xF8, 0xFF, 0x00, 0x00, 0x00, 0x8F, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
+    0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
+    0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
+    0x45, 0xEC, 0x52, 0xFA, 0x08, 0xB7, 0x07, 0x5D, 0x01, 0xFD, 0xC0, 0xFF, 0x08, 0xFC, 0x00, 0xE5,
+    0x0B, 0xF8, 0xC2, 0xCE, 0xF4, 0xF9, 0x0F, 0x7F, 0x45, 0x6D, 0x3D, 0xFE, 0x46, 0x97, 0x33, 0x5E,
+    0x08, 0xEF, 0xF1, 0xFF, 0x86, 0x83, 0x24, 0x74, 0x12, 0xFC, 0x00, 0x9F, 0xB4, 0xB7, 0x06, 0xD5,
+    0xD0, 0x7A, 0x00, 0x9E, 0x04, 0x5F, 0x41, 0x2F, 0x1D, 0x77, 0x36, 0x75, 0x81, 0xAA, 0x70, 0x3A,
+    0x98, 0xD1, 0x71, 0x02, 0x4D, 0x01, 0xC1, 0xFF, 0x0D, 0x00, 0xD3, 0x05, 0xF9, 0x00, 0x0B, 0x00
+];
+
