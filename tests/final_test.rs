@@ -1,4 +1,4 @@
-use gbemu_rust::cpu::Cpu;
+use gbemu_rust::cpu::{Cpu, Reg16};
 use gbemu_rust::memory::Memory;
 use std::fs::File;
 use std::io::Read;
@@ -6,8 +6,7 @@ use std::io::Read;
 fn main() {
     println!("=== CPU Instruction Test ===\n");
 
-    let mut file = File::open("roms/test_roms/cpu_instrs.gb")
-        .expect("Failed to open ROM file");
+    let mut file = File::open("roms/test_roms/cpu_instrs.gb").expect("Failed to open ROM file");
 
     let mut buffer = vec![];
     file.read_to_end(&mut buffer).expect("Failed to read ROM");
@@ -19,16 +18,16 @@ fn main() {
     mem.init_post_boot_state();
 
     let mut cpu = Cpu::new();
-    cpu.registers.write_16("af", 0x01B0);
-    cpu.registers.write_16("bc", 0x0013);
-    cpu.registers.write_16("de", 0x00D8);
-    cpu.registers.write_16("hl", 0x014D);
-    cpu.registers.write_16("sp", 0xFFFE);
-    cpu.registers.write_16("pc", 0x0100);
+    cpu.registers.write_r16(Reg16::AF, 0x01B0);
+    cpu.registers.write_r16(Reg16::BC, 0x0013);
+    cpu.registers.write_r16(Reg16::DE, 0x00D8);
+    cpu.registers.write_r16(Reg16::HL, 0x014D);
+    cpu.registers.write_r16(Reg16::SP, 0xFFFE);
+    cpu.registers.write_r16(Reg16::PC, 0x0100);
 
     println!("Initial state:");
-    println!("  PC: 0x{:04X}", cpu.registers.read_16("pc"));
-    println!("  SP: 0x{:04X}", cpu.registers.read_16("sp"));
+    println!("  PC: 0x{:04X}", cpu.registers.read_r16(Reg16::PC));
+    println!("  SP: 0x{:04X}", cpu.registers.read_r16(Reg16::SP));
     println!();
 
     let max_cycles: u64 = 2_000_000_000; // explicit u64
@@ -39,7 +38,7 @@ fn main() {
     let mut pc_zero_count = 0;
 
     while cycle_count < max_cycles {
-        let pc = cpu.registers.read_16("pc");
+        let pc = cpu.registers.read_r16(Reg16::PC);
 
         // Check for infinite loop or stuck state
         if pc == 0 {
@@ -47,12 +46,12 @@ fn main() {
             if pc_zero_count == 1 {
                 println!("\n  PC became 0!");
                 println!("Previous PC: 0x{:04X}", prev_pc);
-                println!("SP: 0x{:04X}", cpu.registers.read_16("sp"));
+                println!("SP: 0x{:04X}", cpu.registers.read_r16(Reg16::SP));
             }
             // Continue for a bit at PC=0 to catch final serial output
             if pc_zero_count > 10000 {
                 // Check what's on the stack
-                let sp = cpu.registers.read_16("sp");
+                let sp = cpu.registers.read_r16(Reg16::SP);
                 if sp < 0xFFFE {
                     let stack_top = mem.read_16(sp);
                     println!("Value at SP: 0x{:04X}", stack_top);
@@ -102,16 +101,21 @@ fn main() {
 
         // Print progress
         if instruction_count % 100_000 == 0 {
-            println!("\nInstructions: {}, Cycles: {}, PC: 0x{:04X}, SP: 0x{:04X}",
-                instruction_count, cycle_count, pc, cpu.registers.read_16("sp"));
+            println!(
+                "\nInstructions: {}, Cycles: {}, PC: 0x{:04X}, SP: 0x{:04X}",
+                instruction_count,
+                cycle_count,
+                pc,
+                cpu.registers.read_r16(Reg16::SP)
+            );
         }
     }
 
     println!("\n=== Final State ===");
     println!("Instructions executed: {}", instruction_count);
     println!("Total cycles: {}", cycle_count);
-    println!("Final PC: 0x{:04X}", cpu.registers.read_16("pc"));
-    println!("Final SP: 0x{:04X}", cpu.registers.read_16("sp"));
+    println!("Final PC: 0x{:04X}", cpu.registers.read_r16(Reg16::PC));
+    println!("Final SP: 0x{:04X}", cpu.registers.read_r16(Reg16::SP));
 
     if last_serial_len > 0 {
         println!("\n=== Serial Output ===");
