@@ -2,3 +2,6 @@
 # ignore all the .gb files
 *.gb
 *.cpp
+*.idea
+
+

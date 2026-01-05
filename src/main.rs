@@ -95,6 +95,15 @@ fn main() {
     let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
     let mut last_frame = Instant::now();
 
+    // FPS counter
+    let mut fps_counter = 0u32;
+    let mut fps_timer = Instant::now();
+    let mut current_fps ;
+
+    // Dynamic estimate for presentation time (exponential moving average)
+    let mut estimated_present_time = Duration::from_micros(0);
+    const PRESENT_TIME_ALPHA: f64 = 0.1; // Smoothing factor for EMA
+
     // Serial forwarding state (mirror final_test harness)
     let mut last_serial_len: usize = 0;
 
@@ -156,19 +165,44 @@ fn main() {
             .update(None, framebuffer, (SCREEN_WIDTH * 3) as usize)
             .expect("Failed to update texture");
 
-        // Render to screen
+        // Prepare rendering
         canvas.clear();
         let dst_rect = Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
         canvas
             .copy(&texture, None, Some(dst_rect))
             .expect("Failed to copy texture");
-        canvas.present();
 
-        // Frame timing this isnt optimal since we present before checking time, I think it would be better to do timing before presenting so we can properly have consistent frame pacing but this is good enough for now :)
-        let frame_time = last_frame.elapsed();
-        if frame_time < frame_duration {
-            std::thread::sleep(frame_duration - frame_time);
+        // Update FPS counter
+        fps_counter += 1;
+        if fps_timer.elapsed() >= Duration::from_secs(1) {
+            current_fps = fps_counter;
+            fps_counter = 0;
+            fps_timer = Instant::now();
+
+            // Update window title with FPS
+            canvas.window_mut().set_title(&format!("Game Boy Emulator - {} FPS", current_fps))
+                .expect("Failed to set window title");
         }
+
+        // Frame timing with dynamic presentation time estimate
+        // Calculate sleep time accounting for estimated present() duration
+        let frame_time = last_frame.elapsed();
+        let target_sleep = frame_duration.saturating_sub(frame_time).saturating_sub(estimated_present_time);
+
+        if target_sleep > Duration::from_micros(100) {
+            std::thread::sleep(target_sleep);
+        }
+
+        // Measure actual present time and update estimate
+        let present_start = Instant::now();
+        canvas.present();
+        let actual_present_time = present_start.elapsed();
+
+        // Update exponential moving average of present time
+        let new_estimate_micros = (PRESENT_TIME_ALPHA * actual_present_time.as_micros() as f64)
+            + ((1.0 - PRESENT_TIME_ALPHA) * estimated_present_time.as_micros() as f64);
+        estimated_present_time = Duration::from_micros(new_estimate_micros as u64);
+
         last_frame = Instant::now();
     }
 }
