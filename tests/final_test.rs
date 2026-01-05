@@ -45,7 +45,7 @@ fn main() {
         if pc == 0 {
             pc_zero_count += 1;
             if pc_zero_count == 1 {
-                println!("\n⚠️  PC became 0!");
+                println!("\n  PC became 0!");
                 println!("Previous PC: 0x{:04X}", prev_pc);
                 println!("SP: 0x{:04X}", cpu.registers.read_16("sp"));
             }
@@ -92,7 +92,7 @@ fn main() {
 
             // Check if test completed
             if serial_output.contains("Passed") {
-                println!("\n\n✅ TEST PASSED!");
+                println!("\n\n TEST PASSED!");
                 break;
             } else if serial_output.contains("Failed") {
                 println!("\n\n❌ TEST FAILED");
@@ -117,6 +117,6 @@ fn main() {
         println!("\n=== Serial Output ===");
         println!("{}", mem.serial.get_output_string());
     } else {
-        println!("\n⚠️  No serial output detected");
+        println!("\n No serial output detected");
     }
 }
