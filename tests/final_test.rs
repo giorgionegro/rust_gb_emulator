@@ -95,7 +95,7 @@ fn main() {
                 println!("\n\n TEST PASSED!");
                 break;
             } else if serial_output.contains("Failed") {
-                println!("\n\n❌ TEST FAILED");
+                println!("\n\nTEST FAILED");
                 break;
             }
         }
