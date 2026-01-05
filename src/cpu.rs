@@ -1,3 +1,6 @@
+use Reg16::*;
+use Reg8::*;
+
 use crate::memory::Memory;
 
 pub static mut DEBUG_PC: u16 = 0;
@@ -34,14 +37,14 @@ impl Operand {
     // Operand index: 0=B, 1=C, 2=D, 3=E, 4=H, 5=L, 6=(HL), 7=A
     fn from_index(idx: u8) -> Self {
         match idx {
-            0 => Operand::Reg8(Reg8::B),
-            1 => Operand::Reg8(Reg8::C),
-            2 => Operand::Reg8(Reg8::D),
-            3 => Operand::Reg8(Reg8::E),
-            4 => Operand::Reg8(Reg8::H),
-            5 => Operand::Reg8(Reg8::L),
+            0 => Operand::Reg8(B),
+            1 => Operand::Reg8(C),
+            2 => Operand::Reg8(D),
+            3 => Operand::Reg8(E),
+            4 => Operand::Reg8(H),
+            5 => Operand::Reg8(L),
             6 => Operand::MemHL,
-            7 => Operand::Reg8(Reg8::A),
+            7 => Operand::Reg8(A),
             _ => panic!("Invalid operand index: {}", idx),
         }
     }
@@ -70,52 +73,52 @@ impl Registers {
     // Enum-based read for 8-bit registers
     pub fn read_r8(&self, register: Reg8) -> u8 {
         match register {
-            Reg8::A => (self.af >> 8) as u8,
-            Reg8::B => (self.bc >> 8) as u8,
-            Reg8::C => (self.bc & 0xFF) as u8,
-            Reg8::D => (self.de >> 8) as u8,
-            Reg8::E => (self.de & 0xFF) as u8,
-            Reg8::H => (self.hl >> 8) as u8,
-            Reg8::L => (self.hl & 0xFF) as u8,
-            Reg8::F => (self.af & 0xFF) as u8,
+            A => (self.af >> 8) as u8,
+            B => (self.bc >> 8) as u8,
+            C => (self.bc & 0xFF) as u8,
+            D => (self.de >> 8) as u8,
+            E => (self.de & 0xFF) as u8,
+            H => (self.hl >> 8) as u8,
+            L => (self.hl & 0xFF) as u8,
+            F => (self.af & 0xFF) as u8,
         }
     }
 
     // Enum-based read for 16-bit registers
     pub fn read_r16(&self, register: Reg16) -> u16 {
         match register {
-            Reg16::AF => self.af,
-            Reg16::BC => self.bc,
-            Reg16::DE => self.de,
-            Reg16::HL => self.hl,
-            Reg16::SP => self.sp,
-            Reg16::PC => self.pc,
+            AF => self.af,
+            BC => self.bc,
+            DE => self.de,
+            HL => self.hl,
+            SP => self.sp,
+            PC => self.pc,
         }
     }
 
     // Enum-based write for 8-bit registers
     pub fn write_r8(&mut self, register: Reg8, value: u8) {
         match register {
-            Reg8::A => self.af = (self.af & 0xFF) | ((value as u16) << 8),
-            Reg8::B => self.bc = (self.bc & 0xFF) | ((value as u16) << 8),
-            Reg8::C => self.bc = (self.bc & 0xFF00) | value as u16,
-            Reg8::D => self.de = (self.de & 0xFF) | ((value as u16) << 8),
-            Reg8::E => self.de = (self.de & 0xFF00) | value as u16,
-            Reg8::H => self.hl = (self.hl & 0xFF) | ((value as u16) << 8),
-            Reg8::L => self.hl = (self.hl & 0xFF00) | value as u16,
-            Reg8::F => self.af = (self.af & 0xFF00) | ((value & 0xF0) as u16),
+            A => self.af = (self.af & 0xFF) | ((value as u16) << 8),
+            B => self.bc = (self.bc & 0xFF) | ((value as u16) << 8),
+            C => self.bc = (self.bc & 0xFF00) | value as u16,
+            D => self.de = (self.de & 0xFF) | ((value as u16) << 8),
+            E => self.de = (self.de & 0xFF00) | value as u16,
+            H => self.hl = (self.hl & 0xFF) | ((value as u16) << 8),
+            L => self.hl = (self.hl & 0xFF00) | value as u16,
+            F => self.af = (self.af & 0xFF00) | ((value & 0xF0) as u16),
         }
     }
 
     // Enum-based write for 16-bit registers
     pub fn write_r16(&mut self, register: Reg16, value: u16) {
         match register {
-            Reg16::AF => self.af = value & 0xFFF0,
-            Reg16::BC => self.bc = value,
-            Reg16::DE => self.de = value,
-            Reg16::HL => self.hl = value,
-            Reg16::SP => self.sp = value,
-            Reg16::PC => self.pc = value,
+            AF => self.af = value & 0xFFF0,
+            BC => self.bc = value,
+            DE => self.de = value,
+            HL => self.hl = value,
+            SP => self.sp = value,
+            PC => self.pc = value,
         }
     }
 
@@ -232,7 +235,7 @@ impl Cpu {
             }
         }
 
-        let pc = self.registers.read_r16(Reg16::PC);
+        let pc = self.registers.read_r16(PC);
 
         let opcode = mem.read_8(pc);
 
@@ -250,12 +253,12 @@ impl Cpu {
     }
 
     fn ld_r16_nn(&mut self, mem: &mut Memory, reg: Reg16) {
-        let value = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
+        let value = mem.read_16(self.registers.read_r16(PC) + 1);
         self.registers.write_r16(reg, value);
     }
 
     fn ld_r8_n(&mut self, mem: &mut Memory, reg: Reg8) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
         self.registers.write_r8(reg, value);
     }
 
@@ -265,21 +268,21 @@ impl Cpu {
     }
 
     fn ld_nn_a(&mut self, mem: &mut Memory) {
-        let value = self.registers.read_r8(Reg8::A);
-        mem.write_8(mem.read_16(self.registers.read_r16(Reg16::PC) + 1), value);
+        let value = self.registers.read_r8(A);
+        mem.write_8(mem.read_16(self.registers.read_r16(PC) + 1), value);
     }
 
     fn ld_m_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        mem.write_8(self.registers.read_r16(Reg16::HL), value);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        mem.write_8(self.registers.read_r16(HL), value);
     }
 
     fn ld_sp_e(&mut self, mem: &mut Memory) {
         // Opcode 0xF8: LD HL, SP+e - Load SP + signed offset into HL
-        let offset = mem.read_8(self.registers.read_r16(Reg16::PC) + 1) as i8;
-        let sp = self.registers.read_r16(Reg16::SP);
+        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+        let sp = self.registers.read_r16(SP);
         let result = sp.wrapping_add(offset as i16 as u16);
-        self.registers.write_r16(Reg16::HL, result);
+        self.registers.write_r16(HL, result);
 
         // Flags are calculated on UNSIGNED byte addition (low byte of SP + offset as unsigned byte)
         // Z=0, N=0, H=carry from bit 3, C=carry from bit 7
@@ -295,58 +298,58 @@ impl Cpu {
         if (sp_low as u16 + offset_u8 as u16) > 0xFF {
             flags |= CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn ld_sp_hl(&mut self, _mem: &mut Memory) {
         // Opcode 0xF9: LD SP, HL - Copy HL to SP
-        let value = self.registers.read_r16(Reg16::HL);
-        self.registers.write_r16(Reg16::SP, value);
+        let value = self.registers.read_r16(HL);
+        self.registers.write_r16(SP, value);
     }
 
     fn ld_nn_sp(&mut self, mem: &mut Memory) {
         // Opcode 0x08: LD (nn), SP - Store SP at memory address nn
-        let addr = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
-        let sp = self.registers.read_r16(Reg16::SP);
+        let addr = mem.read_16(self.registers.read_r16(PC) + 1);
+        let sp = self.registers.read_r16(SP);
         mem.write_16(addr, sp);
     }
 
     fn ldh_n_a(&mut self, mem: &mut Memory) {
-        let value = self.registers.read_r8(Reg8::A);
+        let value = self.registers.read_r8(A);
         mem.write_8(
-            0xFF00 + mem.read_8(self.registers.read_r16(Reg16::PC) + 1) as u16,
+            0xFF00 + mem.read_8(self.registers.read_r16(PC) + 1) as u16,
             value,
         );
     }
 
     fn ldh_a_n(&mut self, mem: &mut Memory) {
-        let offset = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
+        let offset = mem.read_8(self.registers.read_r16(PC) + 1);
         let value = mem.read_8(0xFF00 + offset as u16);
-        self.registers.write_r8(Reg8::A, value);
+        self.registers.write_r8(A, value);
     }
 
     fn ldh_c_a(&mut self, mem: &mut Memory) {
-        let value = self.registers.read_r8(Reg8::A);
-        mem.write_8(0xFF00 + self.registers.read_r8(Reg8::C) as u16, value);
+        let value = self.registers.read_r8(A);
+        mem.write_8(0xFF00 + self.registers.read_r8(C) as u16, value);
     }
 
     fn ldh_a_c(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(0xFF00 + (self.registers.read_r8(Reg8::C) as u16));
-        self.registers.write_r8(Reg8::A, value);
+        let value = mem.read_8(0xFF00 + (self.registers.read_r8(C) as u16));
+        self.registers.write_r8(A, value);
     }
 
     fn pop(&mut self, mem: &mut Memory, reg: Reg16) {
-        let value = mem.read_16(self.registers.read_r16(Reg16::SP));
+        let value = mem.read_16(self.registers.read_r16(SP));
         self.registers.write_r16(reg, value);
-        let sp = self.registers.read_r16(Reg16::SP);
-        self.registers.write_r16(Reg16::SP, sp + 2);
+        let sp = self.registers.read_r16(SP);
+        self.registers.write_r16(SP, sp + 2);
     }
 
     fn push(&mut self, mem: &mut Memory, reg: Reg16) {
         let value = self.registers.read_r16(reg);
-        let sp = self.registers.read_r16(Reg16::SP);
-        self.registers.write_r16(Reg16::SP, sp - 2);
-        mem.write_16(self.registers.read_r16(Reg16::SP), value);
+        let sp = self.registers.read_r16(SP);
+        self.registers.write_r16(SP, sp - 2);
+        mem.write_16(self.registers.read_r16(SP), value);
     }
 
     fn inc_r8(&mut self, reg: Reg8) {
@@ -354,7 +357,7 @@ impl Cpu {
         let result = value.wrapping_add(1);
         self.registers.write_r8(reg, result);
 
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | SUBTRACT_FLAG | HALF_CARRY_FLAG);
         if result == 0 {
             flags |= ZERO_FLAG;
@@ -362,7 +365,7 @@ impl Cpu {
         if (value & 0x0F) == 0x0F {
             flags |= HALF_CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn inc_r16(&mut self, reg: Reg16) {
@@ -375,7 +378,7 @@ impl Cpu {
         let result = value.wrapping_sub(1);
         self.registers.write_r8(reg, result);
 
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | HALF_CARRY_FLAG);
         flags |= SUBTRACT_FLAG;
         if result == 0 {
@@ -384,7 +387,7 @@ impl Cpu {
         if (value & 0x0F) == 0 {
             flags |= HALF_CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn dec_r16(&mut self, reg: Reg16) {
@@ -398,7 +401,7 @@ impl Cpu {
         let result = value.wrapping_add(1);
         mem.write_8(addr, result);
 
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | SUBTRACT_FLAG | HALF_CARRY_FLAG);
         if result == 0 {
             flags |= ZERO_FLAG;
@@ -406,7 +409,7 @@ impl Cpu {
         if (value & 0x0F) == 0x0F {
             flags |= HALF_CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn dec_mem(&mut self, mem: &mut Memory, reg: Reg16) {
@@ -415,7 +418,7 @@ impl Cpu {
         let result = value.wrapping_sub(1);
         mem.write_8(addr, result);
 
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | HALF_CARRY_FLAG);
         flags |= SUBTRACT_FLAG;
         if result == 0 {
@@ -424,43 +427,43 @@ impl Cpu {
         if (value & 0x0F) == 0 {
             flags |= HALF_CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn rlca(&mut self) {
-        let value = self.registers.read_r8(Reg8::A);
+        let value = self.registers.read_r8(A);
         let msb = value & 0x80;
         let new_value = (value << 1) | (msb >> 7);
-        self.registers.write_r8(Reg8::A, new_value);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, new_value);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG);
         if msb != 0 {
             flags |= CARRY_FLAG;
         } else {
             flags &= !CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn rla(&mut self) {
-        let value = self.registers.read_r8(Reg8::A);
+        let value = self.registers.read_r8(A);
         let msb = value & 0x80;
-        let new_value = (value << 1) | ((self.registers.read_r8(Reg8::F) & CARRY_FLAG) >> 4);
-        self.registers.write_r8(Reg8::A, new_value);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let new_value = (value << 1) | ((self.registers.read_r8(F) & CARRY_FLAG) >> 4);
+        self.registers.write_r8(A, new_value);
+        let mut flags = self.registers.read_r8(F);
         flags &= !(HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG | CARRY_FLAG);
         if msb != 0 {
             flags |= CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn rrca(&mut self) {
-        let value = self.registers.read_r8(Reg8::A);
+        let value = self.registers.read_r8(A);
         let lsb = value & 0x01;
         let new_value = (value >> 1) | (lsb << 7);
-        self.registers.write_r8(Reg8::A, new_value);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, new_value);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG | CARRY_FLAG);
 
@@ -468,15 +471,15 @@ impl Cpu {
             flags |= CARRY_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn rra(&mut self, _mem: &mut Memory) {
-        let value = self.registers.read_r8(Reg8::A);
+        let value = self.registers.read_r8(A);
         let lsb = value & 0x01;
-        let new_value = (value >> 1) | ((self.registers.read_r8(Reg8::F) & CARRY_FLAG) << 3);
-        self.registers.write_r8(Reg8::A, new_value);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let new_value = (value >> 1) | ((self.registers.read_r8(F) & CARRY_FLAG) << 3);
+        self.registers.write_r8(A, new_value);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG | CARRY_FLAG);
 
@@ -484,16 +487,16 @@ impl Cpu {
             flags |= CARRY_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     //arithmetic and logic
     fn add_hl(&mut self, reg: Reg16) {
         let value = self.registers.read_r16(reg);
-        let hl = self.registers.read_r16(Reg16::HL);
+        let hl = self.registers.read_r16(HL);
         let result: u32 = value as u32 + hl as u32;
-        self.registers.write_r16(Reg16::HL, result as u16);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r16(HL, result as u16);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(SUBTRACT_FLAG | CARRY_FLAG | HALF_CARRY_FLAG);
 
@@ -504,15 +507,15 @@ impl Cpu {
         if (value & 0xFFF) + (hl & 0xFFF) > 0xFFF {
             flags |= HALF_CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn add_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
         let result: u16 = value as u16 + a as u16;
-        self.registers.write_r8(Reg8::A, result as u8);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result as u8);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(SUBTRACT_FLAG | CARRY_FLAG | HALF_CARRY_FLAG | ZERO_FLAG);
 
@@ -527,15 +530,15 @@ impl Cpu {
         if result as u8 == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn add_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
         let result: u16 = value as u16 + a as u16;
-        self.registers.write_r8(Reg8::A, result as u8);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result as u8);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(SUBTRACT_FLAG | CARRY_FLAG | HALF_CARRY_FLAG | ZERO_FLAG);
 
@@ -550,15 +553,15 @@ impl Cpu {
         if result as u8 == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn add_sp_e(&mut self, mem: &mut Memory) {
         // Opcode 0xE8: ADD SP, e - Add signed offset to SP
-        let offset = mem.read_8(self.registers.read_r16(Reg16::PC) + 1) as i8;
-        let sp = self.registers.read_r16(Reg16::SP);
+        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+        let sp = self.registers.read_r16(SP);
         let result = sp.wrapping_add(offset as i16 as u16);
-        self.registers.write_r16(Reg16::SP, result);
+        self.registers.write_r16(SP, result);
 
         // Flags are calculated on UNSIGNED byte addition (low byte of SP + offset as unsigned byte)
         // Z=0, N=0, H=carry from bit 3, C=carry from bit 7
@@ -574,17 +577,17 @@ impl Cpu {
         if (sp_low as u16 + offset_u8 as u16) > 0xFF {
             flags |= CARRY_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn adc_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
-        let carry = (self.registers.read_r8(Reg8::F) & CARRY_FLAG) >> 4;
+        let a = self.registers.read_r8(A);
+        let carry = (self.registers.read_r8(F) & CARRY_FLAG) >> 4;
 
         let result: u16 = value as u16 + a as u16 + carry as u16;
-        self.registers.write_r8(Reg8::A, result as u8);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result as u8);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(SUBTRACT_FLAG | CARRY_FLAG | HALF_CARRY_FLAG | ZERO_FLAG);
 
@@ -599,17 +602,17 @@ impl Cpu {
         if result as u8 == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn adc_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
-        let carry = (self.registers.read_r8(Reg8::F) & CARRY_FLAG) >> 4;
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
+        let carry = (self.registers.read_r8(F) & CARRY_FLAG) >> 4;
 
         let result: u16 = value as u16 + a as u16 + carry as u16;
-        self.registers.write_r8(Reg8::A, result as u8);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result as u8);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(SUBTRACT_FLAG | CARRY_FLAG | HALF_CARRY_FLAG | ZERO_FLAG);
 
@@ -624,14 +627,14 @@ impl Cpu {
         if result & 0xFF == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn sub_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
         let result = a.wrapping_sub(value);
-        self.registers.write_r8(Reg8::A, result);
+        self.registers.write_r8(A, result);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -654,14 +657,14 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn sub_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
         let result = a.wrapping_sub(value);
-        self.registers.write_r8(Reg8::A, result);
+        self.registers.write_r8(A, result);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -684,13 +687,13 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn sbc_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
-        let carry_in = if (self.registers.read_r8(Reg8::F) & CARRY_FLAG) != 0 {
+        let a = self.registers.read_r8(A);
+        let carry_in = if (self.registers.read_r8(F) & CARRY_FLAG) != 0 {
             1u8
         } else {
             0u8
@@ -701,7 +704,7 @@ impl Cpu {
             .wrapping_sub(value as u16)
             .wrapping_sub(carry_in as u16);
         let result = temp_result as u8;
-        self.registers.write_r8(Reg8::A, result);
+        self.registers.write_r8(A, result);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -724,13 +727,13 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn sbc_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
-        let carry_in = if (self.registers.read_r8(Reg8::F) & CARRY_FLAG) != 0 {
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
+        let carry_in = if (self.registers.read_r8(F) & CARRY_FLAG) != 0 {
             1u8
         } else {
             0u8
@@ -741,7 +744,7 @@ impl Cpu {
             .wrapping_sub(value as u16)
             .wrapping_sub(carry_in as u16);
         let result = temp_result as u8;
-        self.registers.write_r8(Reg8::A, result);
+        self.registers.write_r8(A, result);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -764,12 +767,12 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn daa(&mut self, _mem: &mut Memory) {
-        let mut value = self.registers.read_r8(Reg8::A);
-        let flags = self.registers.read_r8(Reg8::F);
+        let mut value = self.registers.read_r8(A);
+        let flags = self.registers.read_r8(F);
         let mut new_flags = flags;
 
         let mut adjust = 0u8;
@@ -808,24 +811,24 @@ impl Cpu {
         }
         // N flag unchanged, H flag cleared
 
-        self.registers.write_r8(Reg8::F, new_flags);
-        self.registers.write_r8(Reg8::A, value);
+        self.registers.write_r8(F, new_flags);
+        self.registers.write_r8(A, value);
     }
 
     fn cpl(&mut self) {
-        let value = self.registers.read_r8(Reg8::A);
-        self.registers.write_r8(Reg8::A, !value);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let value = self.registers.read_r8(A);
+        self.registers.write_r8(A, !value);
+        let mut flags = self.registers.read_r8(F);
         flags |= SUBTRACT_FLAG | HALF_CARRY_FLAG;
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn and_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
         let result = a & value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags |= HALF_CARRY_FLAG;
 
@@ -837,15 +840,15 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn and_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
         let result = a & value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags |= HALF_CARRY_FLAG;
 
@@ -857,15 +860,15 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn xor_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
         let result = a ^ value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !HALF_CARRY_FLAG;
 
@@ -877,15 +880,15 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn xor_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
         let result = a ^ value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !HALF_CARRY_FLAG;
 
@@ -897,15 +900,15 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn or_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
         let result = a | value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !HALF_CARRY_FLAG;
 
@@ -917,15 +920,15 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn or_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
         let result = a | value;
-        self.registers.write_r8(Reg8::A, result);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        self.registers.write_r8(A, result);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !HALF_CARRY_FLAG;
         flags &= !SUBTRACT_FLAG;
@@ -936,12 +939,12 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn cp_a_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let a = self.registers.read_r8(Reg8::A);
+        let a = self.registers.read_r8(A);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -964,12 +967,12 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     pub fn cp_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
-        let a = self.registers.read_r8(Reg8::A);
+        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let a = self.registers.read_r8(A);
 
         // Clear all flags first, then set as needed
         let mut flags = 0;
@@ -992,7 +995,7 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
 
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
     //utils
 
@@ -1000,9 +1003,9 @@ impl Cpu {
     fn read_operand(&self, mem: &Memory, op: Operand) -> u8 {
         match op {
             Operand::Reg8(reg) => self.registers.read_r8(reg),
-            Operand::MemHL => mem.read_8(self.registers.read_r16(Reg16::HL)),
-            Operand::MemBC => mem.read_8(self.registers.read_r16(Reg16::BC)),
-            Operand::MemDE => mem.read_8(self.registers.read_r16(Reg16::DE)),
+            Operand::MemHL => mem.read_8(self.registers.read_r16(HL)),
+            Operand::MemBC => mem.read_8(self.registers.read_r16(BC)),
+            Operand::MemDE => mem.read_8(self.registers.read_r16(DE)),
             _ => panic!("Invalid operand for 8-bit read: {:?}", op),
         }
     }
@@ -1011,9 +1014,9 @@ impl Cpu {
     fn write_operand(&mut self, mem: &mut Memory, op: Operand, value: u8) {
         match op {
             Operand::Reg8(reg) => self.registers.write_r8(reg, value),
-            Operand::MemHL => mem.write_8(self.registers.read_r16(Reg16::HL), value),
-            Operand::MemBC => mem.write_8(self.registers.read_r16(Reg16::BC), value),
-            Operand::MemDE => mem.write_8(self.registers.read_r16(Reg16::DE), value),
+            Operand::MemHL => mem.write_8(self.registers.read_r16(HL), value),
+            Operand::MemBC => mem.write_8(self.registers.read_r16(BC), value),
+            Operand::MemDE => mem.write_8(self.registers.read_r16(DE), value),
             _ => panic!("Invalid operand for 8-bit write: {:?}", op),
         }
     }
@@ -1030,6 +1033,7 @@ impl Cpu {
         // HALT: Stop CPU until interrupt occurs
         // HALT bug: If IME=0 and an interrupt is pending, don't halt
         // but set halt_bug flag to prevent PC increment after next instruction
+        //not sure if this is completetly correct I should check the pandocs again
         let ie = mem.read_8(0xFFFF);
         let if_reg = mem.read_8(0xFF0F);
         let interrupt_pending = (ie & if_reg & 0x1F) != 0;
@@ -1044,25 +1048,25 @@ impl Cpu {
     }
 
     fn scf(&mut self) {
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags |= CARRY_FLAG;
         flags &= !HALF_CARRY_FLAG;
         flags &= !SUBTRACT_FLAG;
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn ccf(&mut self) {
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
         flags ^= CARRY_FLAG;
         flags &= !HALF_CARRY_FLAG;
         flags &= !SUBTRACT_FLAG;
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     //cb instructions
     fn rlc_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
         if value & 0x80 != 0 {
@@ -1078,13 +1082,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
     fn rrc_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
         if value & 0x01 != 0 {
@@ -1100,13 +1104,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
     fn rl_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         let mut carry = 0;
         if flags & CARRY_FLAG != 0 {
@@ -1126,13 +1130,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
     fn rr_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         let mut carry = 0;
         if flags & CARRY_FLAG != 0 {
@@ -1152,13 +1156,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
     fn sla_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op) as i8;
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
         if value as u8 & 0x80 != 0 {
@@ -1174,13 +1178,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result as u8);
     }
 
     fn sra_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op) as i8;
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
         if value & 0x01 != 0 {
@@ -1196,13 +1200,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result as u8);
     }
 
     fn swap_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !(CARRY_FLAG | HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG);
 
@@ -1210,13 +1214,13 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
     fn bit_n_r(&mut self, mem: &mut Memory, op: Operand, n: u8) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags |= HALF_CARRY_FLAG;
 
@@ -1226,12 +1230,12 @@ impl Cpu {
         if value & (1 << n) == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
     }
 
     fn srl_r(&mut self, mem: &mut Memory, op: Operand) {
         let value = self.read_operand(mem, op);
-        let mut flags = self.registers.read_r8(Reg8::F);
+        let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
         if value & 0x01 != 0 {
@@ -1247,7 +1251,7 @@ impl Cpu {
         if result == 0 {
             flags |= ZERO_FLAG;
         }
-        self.registers.write_r8(Reg8::F, flags);
+        self.registers.write_r8(F, flags);
         self.write_operand(mem, op, result);
     }
 
@@ -1264,7 +1268,7 @@ impl Cpu {
     }
 
     fn call_cb(&mut self, mem: &mut Memory) {
-        let cb_opcode = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
+        let cb_opcode = mem.read_8(self.registers.read_r16(PC) + 1);
         let op = Operand::from_index(cb_opcode & 0x07);
 
         match cb_opcode {
@@ -1303,11 +1307,11 @@ impl Cpu {
 
     //flow
     fn jr_e(&mut self, mem: &mut Memory) {
-        let offset = mem.read_8(self.registers.read_r16(Reg16::PC) + 1) as i8;
-        let pc = self.registers.read_r16(Reg16::PC);
+        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+        let pc = self.registers.read_r16(PC);
         // Jump relative to PC+2 (after the JR instruction which is 2 bytes)
         let target = (pc as i32 + 2 + offset as i32) as u16;
-        self.registers.write_r16(Reg16::PC, target);
+        self.registers.write_r16(PC, target);
     }
 
     fn jr_f_e(&mut self, mem: &mut Memory, cflag: char, z: bool) {
@@ -1324,22 +1328,22 @@ impl Cpu {
 
         let cond = if z { 1 } else { 0 };
 
-        if (self.registers.read_r8(Reg8::F) & flag) >> shift == cond {
+        if (self.registers.read_r8(F) & flag) >> shift == cond {
             // Condition met - take the jump
-            let offset = mem.read_8(self.registers.read_r16(Reg16::PC) + 1) as i8;
-            let pc = self.registers.read_r16(Reg16::PC);
+            let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+            let pc = self.registers.read_r16(PC);
             let target = (pc as i32 + 2 + offset as i32) as u16;
-            self.registers.write_r16(Reg16::PC, target);
+            self.registers.write_r16(PC, target);
         } else {
             // Condition not met - skip to next instruction (PC+2)
-            let pc = self.registers.read_r16(Reg16::PC);
-            self.registers.write_r16(Reg16::PC, pc + 2);
+            let pc = self.registers.read_r16(PC);
+            self.registers.write_r16(PC, pc + 2);
         }
     }
 
     fn jp_nn(&mut self, mem: &mut Memory) {
-        let target_address = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
-        self.registers.write_r16(Reg16::PC, target_address);
+        let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+        self.registers.write_r16(PC, target_address);
     }
 
     fn jp_f_nn(&mut self, mem: &mut Memory, cflag: char, condition: bool) {
@@ -1357,30 +1361,30 @@ impl Cpu {
 
         let cond = if condition { 1 } else { 0 };
 
-        if (self.registers.read_r8(Reg8::F) & flag) >> shift == cond {
-            let target_address = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
-            self.registers.write_r16(Reg16::PC, target_address);
+        if (self.registers.read_r8(F) & flag) >> shift == cond {
+            let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+            self.registers.write_r16(PC, target_address);
         } else {
-            let pc = self.registers.read_r16(Reg16::PC);
-            self.registers.write_r16(Reg16::PC, pc + 3);
+            let pc = self.registers.read_r16(PC);
+            self.registers.write_r16(PC, pc + 3);
         }
     }
 
     fn jp_hl(&mut self) {
-        self.registers.write_r16(Reg16::PC, self.registers.read_r16(Reg16::HL));
+        self.registers.write_r16(PC, self.registers.read_r16(HL));
     }
 
     fn call_nn(&mut self, mem: &mut Memory) {
-        let target_address = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
-        let return_address = self.registers.read_r16(Reg16::PC) + 3; // Return to instruction after CALL
+        let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+        let return_address = self.registers.read_r16(PC) + 3; // Return to instruction after CALL
 
         // Push return address onto stack
         self.registers
-            .write_r16(Reg16::SP, self.registers.read_r16(Reg16::SP) - 2);
-        mem.write_16(self.registers.read_r16(Reg16::SP), return_address);
+            .write_r16(SP, self.registers.read_r16(SP) - 2);
+        mem.write_16(self.registers.read_r16(SP), return_address);
 
         // Jump to target address
-        self.registers.write_r16(Reg16::PC, target_address);
+        self.registers.write_r16(PC, target_address);
     }
 
     fn call_f_nn(&mut self, mem: &mut Memory, cflag: char, z: bool) {
@@ -1398,41 +1402,41 @@ impl Cpu {
 
         let cond = if z { 1 } else { 0 };
 
-        if (self.registers.read_r8(Reg8::F) & flag) >> shift == cond {
-            let target_address = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
-            let return_address = self.registers.read_r16(Reg16::PC) + 3; // Return to instruction after CALL
+        if (self.registers.read_r8(F) & flag) >> shift == cond {
+            let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+            let return_address = self.registers.read_r16(PC) + 3; // Return to instruction after CALL
 
             // Push return address onto stack
             self.registers
-                .write_r16(Reg16::SP, self.registers.read_r16(Reg16::SP) - 2);
-            mem.write_16(self.registers.read_r16(Reg16::SP), return_address);
+                .write_r16(SP, self.registers.read_r16(SP) - 2);
+            mem.write_16(self.registers.read_r16(SP), return_address);
 
             // Jump to target address
-            self.registers.write_r16(Reg16::PC, target_address);
+            self.registers.write_r16(PC, target_address);
         } else {
             // Condition not met - skip to next instruction (PC+3)
-            let pc = self.registers.read_r16(Reg16::PC);
-            self.registers.write_r16(Reg16::PC, pc + 3);
+            let pc = self.registers.read_r16(PC);
+            self.registers.write_r16(PC, pc + 3);
         }
     }
 
     fn rst(&mut self, mem: &mut Memory, value: u16) {
-        let return_address = self.registers.read_r16(Reg16::PC) + 1; // RST is 1 byte
+        let return_address = self.registers.read_r16(PC) + 1; // RST is 1 byte
 
         // Push return address onto stack
-        let sp = self.registers.read_r16(Reg16::SP);
-        self.registers.write_r16(Reg16::SP, sp.wrapping_sub(2));
-        mem.write_16(self.registers.read_r16(Reg16::SP), return_address);
+        let sp = self.registers.read_r16(SP);
+        self.registers.write_r16(SP, sp.wrapping_sub(2));
+        mem.write_16(self.registers.read_r16(SP), return_address);
 
         // Jump to RST vector
-        self.registers.write_r16(Reg16::PC, value);
+        self.registers.write_r16(PC, value);
     }
 
     fn ret(&mut self, mem: &mut Memory) {
-        let value = mem.read_16(self.registers.clone().read_r16(Reg16::SP));
+        let value = mem.read_16(self.registers.clone().read_r16(SP));
         self.registers
-            .write_r16(Reg16::SP, self.registers.clone().read_r16(Reg16::SP) + 2);
-        self.registers.write_r16(Reg16::PC, value);
+            .write_r16(SP, self.registers.clone().read_r16(SP) + 2);
+        self.registers.write_r16(PC, value);
     }
 
     fn ret_f(&mut self, mem: &mut Memory, cflag: char, z: bool) {
@@ -1450,24 +1454,24 @@ impl Cpu {
 
         let cond = if z { 1 } else { 0 };
 
-        if (self.registers.read_r8(Reg8::F) & flag) >> shift == cond {
+        if (self.registers.read_r8(F) & flag) >> shift == cond {
             // Condition met - perform return
-            let value = mem.read_16(self.registers.read_r16(Reg16::SP));
+            let value = mem.read_16(self.registers.read_r16(SP));
             self.registers
-                .write_r16(Reg16::SP, self.registers.read_r16(Reg16::SP) + 2);
-            self.registers.write_r16(Reg16::PC, value);
+                .write_r16(SP, self.registers.read_r16(SP) + 2);
+            self.registers.write_r16(PC, value);
         } else {
             // Condition not met - skip to next instruction (PC+1)
-            let pc = self.registers.read_r16(Reg16::PC);
-            self.registers.write_r16(Reg16::PC, pc + 1);
+            let pc = self.registers.read_r16(PC);
+            self.registers.write_r16(PC, pc + 1);
         }
     }
 
     fn reti(&mut self, mem: &mut Memory) {
-        let value = mem.read_16(self.registers.read_r16(Reg16::SP));
+        let value = mem.read_16(self.registers.read_r16(SP));
         self.registers
-            .write_r16(Reg16::SP, self.registers.read_r16(Reg16::SP) + 2);
-        self.registers.write_r16(Reg16::PC, value);
+            .write_r16(SP, self.registers.read_r16(SP) + 2);
+        self.registers.write_r16(PC, value);
         self.registers.write_ime(1); // Re-enable interrupts
     }
 
@@ -1475,80 +1479,80 @@ impl Cpu {
     pub fn execute(&mut self, opcode: u8, mem: &mut Memory) {
         match opcode {
             0x00 => self.nop(),
-            0x01 => self.ld_r16_nn(mem, Reg16::BC),
-            0x02 => self.ld_operand(mem, Operand::MemBC, Operand::Reg8(Reg8::A)),
-            0x03 => self.inc_r16(Reg16::BC),
-            0x04 => self.inc_r8(Reg8::B),
-            0x05 => self.dec_r8(Reg8::B),
-            0x06 => self.ld_r8_n(mem, Reg8::B),
+            0x01 => self.ld_r16_nn(mem, BC),
+            0x02 => self.ld_operand(mem, Operand::MemBC, Operand::Reg8(A)),
+            0x03 => self.inc_r16(BC),
+            0x04 => self.inc_r8(B),
+            0x05 => self.dec_r8(B),
+            0x06 => self.ld_r8_n(mem, B),
             0x07 => self.rlca(),
             0x08 => self.ld_nn_sp(mem),
-            0x09 => self.add_hl(Reg16::BC),
-            0x0A => self.ld_operand(mem, Operand::Reg8(Reg8::A), Operand::MemBC),
-            0x0B => self.dec_r16(Reg16::BC),
-            0x0C => self.inc_r8(Reg8::C),
-            0x0D => self.dec_r8(Reg8::C),
-            0x0E => self.ld_r8_n(mem, Reg8::C),
+            0x09 => self.add_hl(BC),
+            0x0A => self.ld_operand(mem, Operand::Reg8(A), Operand::MemBC),
+            0x0B => self.dec_r16(BC),
+            0x0C => self.inc_r8(C),
+            0x0D => self.dec_r8(C),
+            0x0E => self.ld_r8_n(mem, C),
             0x0F => self.rrca(),
             0x10 => self.stop(),
-            0x11 => self.ld_r16_nn(mem, Reg16::DE),
-            0x12 => self.ld_operand(mem, Operand::MemDE, Operand::Reg8(Reg8::A)),
-            0x13 => self.inc_r16(Reg16::DE),
-            0x14 => self.inc_r8(Reg8::D),
-            0x15 => self.dec_r8(Reg8::D),
-            0x16 => self.ld_r8_n(mem, Reg8::D),
+            0x11 => self.ld_r16_nn(mem, DE),
+            0x12 => self.ld_operand(mem, Operand::MemDE, Operand::Reg8(A)),
+            0x13 => self.inc_r16(DE),
+            0x14 => self.inc_r8(D),
+            0x15 => self.dec_r8(D),
+            0x16 => self.ld_r8_n(mem, D),
             0x17 => self.rla(),
             0x18 => self.jr_e(mem),
-            0x19 => self.add_hl(Reg16::DE),
-            0x1A => self.ld_operand(mem, Operand::Reg8(Reg8::A), Operand::MemDE),
-            0x1B => self.dec_r16(Reg16::DE),
-            0x1C => self.inc_r8(Reg8::E),
-            0x1D => self.dec_r8(Reg8::E),
-            0x1E => self.ld_r8_n(mem, Reg8::E),
+            0x19 => self.add_hl(DE),
+            0x1A => self.ld_operand(mem, Operand::Reg8(A), Operand::MemDE),
+            0x1B => self.dec_r16(DE),
+            0x1C => self.inc_r8(E),
+            0x1D => self.dec_r8(E),
+            0x1E => self.ld_r8_n(mem, E),
             0x1F => self.rra(mem),
             0x20 => self.jr_f_e(mem, 'z', false),
-            0x21 => self.ld_r16_nn(mem, Reg16::HL),
+            0x21 => self.ld_r16_nn(mem, HL),
             0x22 => {
-                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(Reg8::A));
-                self.inc_r16(Reg16::HL);
+                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(A));
+                self.inc_r16(HL);
             }
-            0x23 => self.inc_r16(Reg16::HL),
-            0x24 => self.inc_r8(Reg8::H),
-            0x25 => self.dec_r8(Reg8::H),
-            0x26 => self.ld_r8_n(mem, Reg8::H),
+            0x23 => self.inc_r16(HL),
+            0x24 => self.inc_r8(H),
+            0x25 => self.dec_r8(H),
+            0x26 => self.ld_r8_n(mem, H),
             0x27 => self.daa(mem),
             0x28 => self.jr_f_e(mem, 'z', true),
-            0x29 => self.add_hl(Reg16::HL),
+            0x29 => self.add_hl(HL),
             0x2A => {
-                self.ld_operand(mem, Operand::Reg8(Reg8::A), Operand::MemHL);
-                self.inc_r16(Reg16::HL);
+                self.ld_operand(mem, Operand::Reg8(A), Operand::MemHL);
+                self.inc_r16(HL);
             }
-            0x2B => self.dec_r16(Reg16::HL),
-            0x2C => self.inc_r8(Reg8::L),
-            0x2D => self.dec_r8(Reg8::L),
-            0x2E => self.ld_r8_n(mem, Reg8::L),
+            0x2B => self.dec_r16(HL),
+            0x2C => self.inc_r8(L),
+            0x2D => self.dec_r8(L),
+            0x2E => self.ld_r8_n(mem, L),
             0x2F => self.cpl(),
             0x30 => self.jr_f_e(mem, 'c', false),
-            0x31 => self.ld_r16_nn(mem, Reg16::SP),
+            0x31 => self.ld_r16_nn(mem, SP),
             0x32 => {
-                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(Reg8::A));
-                self.dec_r16(Reg16::HL);
+                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(A));
+                self.dec_r16(HL);
             }
-            0x33 => self.inc_r16(Reg16::SP),
-            0x34 => self.inc_mem(mem, Reg16::HL),
-            0x35 => self.dec_mem(mem, Reg16::HL),
+            0x33 => self.inc_r16(SP),
+            0x34 => self.inc_mem(mem, HL),
+            0x35 => self.dec_mem(mem, HL),
             0x36 => self.ld_m_n(mem),
             0x37 => self.scf(),
             0x38 => self.jr_f_e(mem, 'c', true),
-            0x39 => self.add_hl(Reg16::SP),
+            0x39 => self.add_hl(SP),
             0x3A => {
-                self.ld_operand(mem, Operand::Reg8(Reg8::A), Operand::MemHL);
-                self.dec_r16(Reg16::HL);
+                self.ld_operand(mem, Operand::Reg8(A), Operand::MemHL);
+                self.dec_r16(HL);
             }
-            0x3B => self.dec_r16(Reg16::SP),
-            0x3C => self.inc_r8(Reg8::A),
-            0x3D => self.dec_r8(Reg8::A),
-            0x3E => self.ld_r8_n(mem, Reg8::A),
+            0x3B => self.dec_r16(SP),
+            0x3C => self.inc_r8(A),
+            0x3D => self.dec_r8(A),
+            0x3E => self.ld_r8_n(mem, A),
             0x3F => self.ccf(),
             0x76 => self.halt(mem), // HALT instruction (not LD (HL),(HL))
             0x40..=0x75 | 0x77..=0x7F => {
@@ -1566,11 +1570,11 @@ impl Cpu {
             0xB0..=0xB7 => self.or_a_r(mem, Operand::from_index(opcode & 0x07)),
             0xB8..=0xBF => self.cp_a_r(mem, Operand::from_index(opcode & 0x07)),
             0xC0 => self.ret_f(mem, 'z', false),
-            0xC1 => self.pop(mem, Reg16::BC),
+            0xC1 => self.pop(mem, BC),
             0xC2 => self.jp_f_nn(mem, 'z', false),
             0xC3 => self.jp_nn(mem),
             0xC4 => self.call_f_nn(mem, 'z', false),
-            0xC5 => self.push(mem, Reg16::BC),
+            0xC5 => self.push(mem, BC),
             0xC6 => self.add_a_n(mem),
             0xC7 => self.rst(mem, 0x00),
             0xC8 => self.ret_f(mem, 'z', true),
@@ -1582,10 +1586,10 @@ impl Cpu {
             0xCE => self.adc_a_n(mem),
             0xCF => self.rst(mem, 0x08),
             0xD0 => self.ret_f(mem, 'c', false),
-            0xD1 => self.pop(mem, Reg16::DE),
+            0xD1 => self.pop(mem, DE),
             0xD2 => self.jp_f_nn(mem, 'c', false),
             0xD4 => self.call_f_nn(mem, 'c', false),
-            0xD5 => self.push(mem, Reg16::DE),
+            0xD5 => self.push(mem, DE),
             0xD6 => self.sub_a_n(mem),
             0xD7 => self.rst(mem, 0x10),
             0xD8 => self.ret_f(mem, 'c', true),
@@ -1595,9 +1599,9 @@ impl Cpu {
             0xDE => self.sbc_a_n(mem),
             0xDF => self.rst(mem, 0x18),
             0xE0 => self.ldh_n_a(mem),
-            0xE1 => self.pop(mem, Reg16::HL),
+            0xE1 => self.pop(mem, HL),
             0xE2 => self.ldh_c_a(mem),
-            0xE5 => self.push(mem, Reg16::HL),
+            0xE5 => self.push(mem, HL),
             0xE6 => self.and_a_n(mem),
             0xE7 => self.rst(mem, 0x20),
             0xE8 => self.add_sp_e(mem),
@@ -1606,18 +1610,18 @@ impl Cpu {
             0xEE => self.xor_a_n(mem),
             0xEF => self.rst(mem, 0x28),
             0xF0 => self.ldh_a_n(mem),
-            0xF1 => self.pop(mem, Reg16::AF),
+            0xF1 => self.pop(mem, AF),
             0xF2 => self.ldh_a_c(mem),
             0xF3 => self.di(),
-            0xF5 => self.push(mem, Reg16::AF),
+            0xF5 => self.push(mem, AF),
             0xF6 => self.or_a_n(mem),
             0xF7 => self.rst(mem, 0x30),
             0xF8 => self.ld_sp_e(mem),
             0xF9 => self.ld_sp_hl(mem),
             0xFA => {
-                let addr = mem.read_16(self.registers.read_r16(Reg16::PC) + 1);
+                let addr = mem.read_16(self.registers.read_r16(PC) + 1);
                 let value = mem.read_8(addr);
-                self.registers.write_r8(Reg8::A, value);
+                self.registers.write_r8(A, value);
             }
             0xFB => self.ei(),
             0xFE => self.cp_a_n(mem),
@@ -1626,11 +1630,11 @@ impl Cpu {
                 println!(
                     "CPU: Unknown/unimplemented opcode 0x{:02X} at PC 0x{:04X}!",
                     opcode,
-                    self.registers.read_r16(Reg16::PC)
+                    self.registers.read_r16(PC)
                 );
                 // Just NOP and continue instead of panicking
-                let pc = self.registers.read_r16(Reg16::PC);
-                self.registers.write_r16(Reg16::PC, pc + 1);
+                let pc = self.registers.read_r16(PC);
+                self.registers.write_r16(PC, pc + 1);
             }
         }
     }
@@ -1651,7 +1655,7 @@ impl Cpu {
 
         // Only increment PC if this is not a PC-modifying instruction
         if !pc_modifying_opcodes.contains(&opcode) {
-            let pc = self.registers.read_r16(Reg16::PC);
+            let pc = self.registers.read_r16(PC);
             let length = OPCODE_LENGTHS[opcode as usize] as u16;
 
             // Handle HALT bug: when halt_bug is set, the next instruction after HALT
@@ -1660,7 +1664,7 @@ impl Cpu {
                 self.halt_bug = false;
                 // PC stays at current position - next fetch will read same byte again
             } else {
-                self.registers.write_r16(Reg16::PC, pc.wrapping_add(length));
+                self.registers.write_r16(PC, pc.wrapping_add(length));
             }
         }
 
@@ -1668,7 +1672,7 @@ impl Cpu {
         let mut cycles = OPCODE_DURATION[opcode as usize];
 
         if opcode == 0xCB {
-            let cb_opcode = mem.read_8(self.registers.read_r16(Reg16::PC) + 1);
+            let cb_opcode = mem.read_8(self.registers.read_r16(PC) + 1);
             cycles = OPCODE_DURATION_CB[cb_opcode as usize];
         }
 
@@ -1766,14 +1770,14 @@ impl Cpu {
         mem.write_8(0xFF0F, if_reg & !(1 << interrupt));
 
         // Push PC onto stack
-        let pc = self.registers.read_r16(Reg16::PC);
-        let sp = self.registers.read_r16(Reg16::SP);
-        self.registers.write_r16(Reg16::SP, sp.wrapping_sub(2));
-        mem.write_16(self.registers.read_r16(Reg16::SP), pc);
+        let pc = self.registers.read_r16(PC);
+        let sp = self.registers.read_r16(SP);
+        self.registers.write_r16(SP, sp.wrapping_sub(2));
+        mem.write_16(self.registers.read_r16(SP), pc);
 
         // Jump to interrupt vector
         let vector = 0x0040 + (interrupt as u16 * 0x08);
-        self.registers.write_r16(Reg16::PC, vector);
+        self.registers.write_r16(PC, vector);
 
         // Add interrupt handling cycles (20 cycles)
         self.cycles += 20;
