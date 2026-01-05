@@ -1,5 +1,5 @@
 ﻿extern crate sdl2;
-use gbemu_rust::cpu::Cpu;
+use gbemu_rust::cpu::{Cpu, Reg16};
 use gbemu_rust::joypad::JoypadButton;
 use gbemu_rust::memory::Memory;
 use std::env;
@@ -39,7 +39,7 @@ fn main() {
     let rom_path = if args.len() > 1 {
         args[1].clone()
     } else {
-        String::from("roms/roms/tetris.gb")
+        String::from("roms/test_roms/cpu_instrs.gb")
     };
 
     println!("Loading ROM: {}", rom_path);
@@ -80,19 +80,18 @@ fn main() {
     mem.init_post_boot_state();
 
     let mut cpu = Cpu::new();
-    cpu.registers.write_16("af", 0x01B0);
-    cpu.registers.write_16("bc", 0x0013);
-    cpu.registers.write_16("de", 0x00D8);
-    cpu.registers.write_16("hl", 0x014D);
-    cpu.registers.write_16("sp", 0xFFFE);
-    cpu.registers.write_16("pc", 0x0100);
+    cpu.registers.write_r16(Reg16::AF, 0x01B0);
+    cpu.registers.write_r16(Reg16::BC, 0x0013);
+    cpu.registers.write_r16(Reg16::DE, 0x00D8);
+    cpu.registers.write_r16(Reg16::HL, 0x014D);
+    cpu.registers.write_r16(Reg16::SP, 0xFFFE);
+    cpu.registers.write_r16(Reg16::PC, 0x0100);
     cpu.registers.ime = 1; // Interrupts enabled after boot ROM
 
     // Main emulation loop
     let mut event_pump = sdl_context
         .event_pump()
         .expect("Failed to get SDL event pump");
-    let mut frame_count = 0;
     let frame_duration = Duration::from_secs_f64(1.0 / 60.0);
     let mut last_frame = Instant::now();
 
@@ -159,19 +158,17 @@ fn main() {
 
         // Render to screen
         canvas.clear();
-        // Scale texture to window size so it's visible
         let dst_rect = Rect::new(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
         canvas
             .copy(&texture, None, Some(dst_rect))
             .expect("Failed to copy texture");
         canvas.present();
 
-        // Frame timing
+        // Frame timing this isnt optimal since we present before checking time, I think it would be better to do timing before presenting so we can properly have consistent frame pacing but this is good enough for now :)
         let frame_time = last_frame.elapsed();
         if frame_time < frame_duration {
             std::thread::sleep(frame_duration - frame_time);
         }
         last_frame = Instant::now();
-        frame_count += 1;
     }
 }

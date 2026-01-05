@@ -30,6 +30,12 @@ pub enum JoypadButton {
     Start,
 }
 
+impl Default for Joypad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Joypad {
     pub fn new() -> Self {
         let mut buttons = HashMap::new();
@@ -55,7 +61,13 @@ impl Joypad {
             if !*state {
                 *state = true;
                 // Only trigger interrupt if the button's group is currently selected
-                let is_direction = matches!(button, JoypadButton::Up | JoypadButton::Down | JoypadButton::Left | JoypadButton::Right);
+                let is_direction = matches!(
+                    button,
+                    JoypadButton::Up
+                        | JoypadButton::Down
+                        | JoypadButton::Left
+                        | JoypadButton::Right
+                );
                 let is_button = !is_direction;
                 let select_directions = (self.register & 0x10) == 0;
                 let select_buttons = (self.register & 0x20) == 0;

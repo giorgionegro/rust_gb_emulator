@@ -1,16 +1,14 @@
-﻿use std::ptr::null_mut;
-use crate::timer::Timer;
-use crate::serial::Serial;
-use crate::ppu::Ppu;
 use crate::joypad::Joypad;
+use crate::ppu::Ppu;
+use crate::serial::Serial;
+use crate::timer::Timer;
+use std::ptr::null_mut;
 
 type MainMemory = [u8; 0x10000];
 
 type RawBankNumber = u8;
 
 const BANK_MASK: u8 = 0b0001_1111;
-
-type Bank = [u8; 0x4000];
 
 pub struct Memory {
     pub main_memory: MainMemory,
@@ -64,11 +62,11 @@ pub struct Rom {
     pub bank: *mut u8,
 }
 
-const RBN: u16 = 0x2000;
-
 impl Memory {
     pub fn read_8(&self, address: u16) -> u8 {
-        let value = if address == 0xFF00 {
+        
+
+        if address == 0xFF00 {
             self.joypad.read()
         } else if (0xFF04..=0xFF07).contains(&address) {
             self.timer.read(address)
@@ -83,7 +81,11 @@ impl Memory {
         } else if self.rom_loaded && address < 0x4000 {
             self.rom.buffer[address as usize]
         } else if self.rom_loaded && (0x4000..0x8000).contains(&address) {
-            let bank = if self.current_rom_bank == 0 { 1 } else { self.current_rom_bank };
+            let bank = if self.current_rom_bank == 0 {
+                1
+            } else {
+                self.current_rom_bank
+            };
             let offset = (bank as usize) * 0x4000 + (address as usize - 0x4000);
 
             if offset < self.rom.buffer.len() {
@@ -93,9 +95,7 @@ impl Memory {
             }
         } else {
             self.main_memory[address as usize]
-        };
-
-        value
+        }
     }
 
     pub fn read_16(&self, address: u16) -> u16 {
@@ -138,7 +138,6 @@ impl Memory {
                 self.ppu.oam[i as usize] = v;
             }
 
-
             // Also write the value to IO register if code expects to read it
             self.main_memory[address as usize] = value;
             return;
@@ -152,15 +151,20 @@ impl Memory {
             return;
         } else if (0xFF01..=0xFF02).contains(&address) {
             self.serial.write(address, value);
-          
+
             return;
         } else if (0xFF40..=0xFF4B).contains(&address) {
             self.ppu.write(address, value);
             return;
         } else if (0x8000..=0x9FFF).contains(&address) {
-            if self.dma_active {
+            // VRAM can only be written when LCD is off OR PPU is not in mode 3 (drawing)
+            // Mode is stored in lower 2 bits of STAT register
+            let ppu_mode = self.ppu.stat & 0x03;
+            if self.dma_active || ppu_mode == 3 {
+                // DMA or mode 3 active, maybe we should add the LCD off check later but fir now it works
                 return;
             }
+
             self.ppu.vram[(address - 0x8000) as usize] = value;
             return;
         } else if (0xFE00..=0xFE9F).contains(&address) {
@@ -174,8 +178,6 @@ impl Memory {
             self.write_to_rom_register(address, value);
             return;
         }
-
-
 
         // Default: write to main memory
         self.main_memory[address as usize] = value;
@@ -238,6 +240,5 @@ static IO_RESET: [u8; 0x100] = [
     0x0B, 0xF8, 0xC2, 0xCE, 0xF4, 0xF9, 0x0F, 0x7F, 0x45, 0x6D, 0x3D, 0xFE, 0x46, 0x97, 0x33, 0x5E,
     0x08, 0xEF, 0xF1, 0xFF, 0x86, 0x83, 0x24, 0x74, 0x12, 0xFC, 0x00, 0x9F, 0xB4, 0xB7, 0x06, 0xD5,
     0xD0, 0x7A, 0x00, 0x9E, 0x04, 0x5F, 0x41, 0x2F, 0x1D, 0x77, 0x36, 0x75, 0x81, 0xAA, 0x70, 0x3A,
-    0x98, 0xD1, 0x71, 0x02, 0x4D, 0x01, 0xC1, 0xFF, 0x0D, 0x00, 0xD3, 0x05, 0xF9, 0x00, 0x0B, 0x00
+    0x98, 0xD1, 0x71, 0x02, 0x4D, 0x01, 0xC1, 0xFF, 0x0D, 0x00, 0xD3, 0x05, 0xF9, 0x00, 0x0B, 0x00,
 ];
-

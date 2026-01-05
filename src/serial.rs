@@ -1,4 +1,4 @@
-﻿// Serial I/O implementation for Game Boy
+// Serial I/O implementation for Game Boy
 // Registers:
 // 0xFF01 - SB (Serial Transfer Data)
 // 0xFF02 - SC (Serial Transfer Control)
@@ -6,10 +6,16 @@
 //   Bit 0: Shift Clock (1=Internal, 0=External)
 
 pub struct Serial {
-    sb: u8,  // Serial transfer data
-    sc: u8,  // Serial transfer control
-    pub interrupt_pending: bool,  // Serial interrupt flag
+    sb: u8,                      // Serial transfer data
+    sc: u8,                      // Serial transfer control
+    pub interrupt_pending: bool, // Serial interrupt flag
     pub output_buffer: Vec<u8>,  // Buffer for captured output
+}
+
+impl Default for Serial {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Serial {
@@ -25,8 +31,8 @@ impl Serial {
     // Read from serial registers
     pub fn read(&self, address: u16) -> u8 {
         match address {
-            0xFF01 => self.sb, // Reading SB returns 0xFF (no connection)
-            0xFF02 => self.sc | 0x7E,  // Bits 1-6 always set
+            0xFF01 => self.sb,        // Reading SB returns 0xFF (no connection)
+            0xFF02 => self.sc | 0x7E, // Bits 1-6 always set
             _ => 0xFF,
         }
     }
@@ -57,7 +63,6 @@ impl Serial {
             _ => {}
         }
     }
-
 
     // Clear the interrupt flag (called after interrupt is serviced)
     pub fn clear_interrupt(&mut self) {
@@ -101,10 +106,10 @@ mod tests {
 
         // Note: Transfer is NOT completed automatically to avoid Tetris link cable issues
         // SB remains unchanged, SC keeps bit 7 set, no interrupt is generated
-        assert_eq!(serial.read(0xFF01), 0x42);  // SB unchanged
-        assert_eq!(serial.read(0xFF02) & 0x80, 0x80);  // Transfer flag still set
-        assert!(!serial.interrupt_pending);  // No interrupt
-        assert_eq!(serial.output_buffer.len(), 1);  // But output is captured
+        assert_eq!(serial.read(0xFF01), 0x42); // SB unchanged
+        assert_eq!(serial.read(0xFF02) & 0x80, 0x80); // Transfer flag still set
+        assert!(!serial.interrupt_pending); // No interrupt
+        assert_eq!(serial.output_buffer.len(), 1); // But output is captured
         assert_eq!(serial.output_buffer[0], 0x42);
     }
 
@@ -136,4 +141,3 @@ mod tests {
         assert_eq!(serial.get_output_string(), "Hello");
     }
 }
-
