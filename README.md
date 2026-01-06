@@ -8,7 +8,7 @@ A Game Boy (DMG-01) emulator written in Rust. This project implements the core h
 - PPU: Tile-based background and sprite rendering.
 - MMU: 16-bit address space management and I/O mapping.
 - Timer: System clock and internal timer synchronization.
-- Joypad: Keyboard input mapping via winit.
+- Joypad: Keyboard input mapping.
 
 ## Requirements
 
