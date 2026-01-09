@@ -140,7 +140,7 @@ fn main() {
             // We no longer tick here to avoid double-ticking
             // DMA still needs to be progressed based on cycles
             if mem.dma_active {
-                let m_cycles = (delta_cycles / 4) as u16;
+                let m_cycles = (delta_cycles ) as u16;
                 if mem.dma_cycles_remaining > m_cycles {
                     mem.dma_cycles_remaining -= m_cycles;
                 } else {
