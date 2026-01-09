@@ -99,7 +99,7 @@ impl Memory {
     // Tick timer and PPU - called explicitly by CPU during instruction execution
     pub fn tick_components(&mut self, m_cycles: u32) {
         self.timer.tick(m_cycles as u16);
-        self.ppu.step(m_cycles);
+        self.ppu.step(m_cycles*4);
 
         // Handle DMA cycles
         if self.dma_active {
