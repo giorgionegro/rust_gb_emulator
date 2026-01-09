@@ -64,8 +64,6 @@ pub struct Rom {
 
 impl Memory {
     pub fn read_8(&self, address: u16) -> u8 {
-        
-
         if address == 0xFF00 {
             self.joypad.read()
         } else if (0xFF04..=0xFF07).contains(&address) {
@@ -218,7 +216,7 @@ impl Memory {
         // Ensure the Joypad internal register reflects the copied IO_RESET value at 0xFF00
         let joypad_init = self.main_memory[0xFF00];
         self.joypad.set_register_raw(joypad_init);
-        // Ensure boot-disable (FF50) is set to 1 to indicate boot ROM finished
+ // Ensure boot-disable (FF50) is set to 1 to indicate boot ROM finished
         self.main_memory[0xFF50] = 0x01;
     }
 }

@@ -39,7 +39,7 @@ fn main() {
     let rom_path = if args.len() > 1 {
         args[1].clone()
     } else {
-        String::from("roms/test_roms/cpu_instrs.gb")
+        String::from("roms/test_roms/instr_timing.gb")
     };
 
     println!("Loading ROM: {}", rom_path);
@@ -135,19 +135,24 @@ fn main() {
         while cycles < 70224 {
             let delta_cycles = cpu.step(&mut mem);
             cycles += delta_cycles;
-            // Step PPU and Timer incrementally as in tests
-            mem.ppu.step(delta_cycles);
-            mem.timer.tick(delta_cycles as u16);
-            // Progress OAM DMA timing: decrement remaining cycles and clear active when done
-            if mem.dma_active {
-                if delta_cycles >= mem.dma_cycles_remaining as u32 {
-                    mem.dma_cycles_remaining = 0;
-                    mem.dma_active = false;
-                } else {
-                    mem.dma_cycles_remaining =
-                        mem.dma_cycles_remaining.wrapping_sub(delta_cycles as u16);
+
+            // Tick timer/PPU with sub-instruction granularity for accuracy
+            // delta_cycles is in T-cycles from CPU
+            // Tick in 1 M-cycle (4 T-cycle) increments
+            let m_cycles = delta_cycles / 4;
+            for _ in 0..m_cycles {
+                mem.ppu.step(4); // PPU expects T-cycles
+                mem.timer.tick(1); // Timer expects M-cycles
+
+                // Progress OAM DMA timing
+                if mem.dma_active && mem.dma_cycles_remaining > 0 {
+                    mem.dma_cycles_remaining -= 1;
+                    if mem.dma_cycles_remaining == 0 {
+                        mem.dma_active = false;
+                    }
                 }
             }
+
             cpu.handle_interrupts(&mut mem);
 
             // Forward serial output as it arrives
