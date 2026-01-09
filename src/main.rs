@@ -136,20 +136,16 @@ fn main() {
             let delta_cycles = cpu.step(&mut mem);
             cycles += delta_cycles;
 
-            // Tick timer/PPU with sub-instruction granularity for accuracy
-            // delta_cycles is in T-cycles from CPU
-            // Tick in 1 M-cycle (4 T-cycle) increments
-            let m_cycles = delta_cycles / 4;
-            for _ in 0..m_cycles {
-                mem.ppu.step(4); // PPU expects T-cycles
-                mem.timer.tick(1); // Timer expects M-cycles
-
-                // Progress OAM DMA timing
-                if mem.dma_active && mem.dma_cycles_remaining > 0 {
-                    mem.dma_cycles_remaining -= 1;
-                    if mem.dma_cycles_remaining == 0 {
-                        mem.dma_active = false;
-                    }
+            // NOTE: Timer/PPU ticking now happens INSIDE instructions via tick_components()
+            // We no longer tick here to avoid double-ticking
+            // DMA still needs to be progressed based on cycles
+            if mem.dma_active {
+                let m_cycles = (delta_cycles / 4) as u16;
+                if mem.dma_cycles_remaining > m_cycles {
+                    mem.dma_cycles_remaining -= m_cycles;
+                } else {
+                    mem.dma_cycles_remaining = 0;
+                    mem.dma_active = false;
                 }
             }
 

@@ -29,7 +29,7 @@ impl Default for Timer {
 impl Timer {
     pub fn new() -> Timer {
         Timer {
-            internal_counter: 0,
+            internal_counter: 0xABCC, // Post-boot ROM initial value
             tima: 0,
             tma: 0,
             tac: 0,

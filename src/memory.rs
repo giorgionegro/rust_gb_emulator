@@ -96,6 +96,23 @@ impl Memory {
         }
     }
 
+    // Tick timer and PPU - called explicitly by CPU during instruction execution
+    pub fn tick_components(&mut self, m_cycles: u32) {
+        self.timer.tick(m_cycles as u16);
+        self.ppu.step(m_cycles);
+
+        // Handle DMA cycles
+        if self.dma_active {
+            if m_cycles >= self.dma_cycles_remaining as u32 {
+                self.dma_cycles_remaining = 0;
+                self.dma_active = false;
+            } else {
+                self.dma_cycles_remaining =
+                    self.dma_cycles_remaining.wrapping_sub(m_cycles as u16);
+            }
+        }
+    }
+
     pub fn read_16(&self, address: u16) -> u16 {
         let x = self.read_8(address);
         let y = self.read_8(address + 1);

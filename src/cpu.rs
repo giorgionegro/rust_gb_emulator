@@ -56,6 +56,8 @@ pub struct Cpu {
     pub ei_pending: bool, // EI has 1-instruction delay
     pub halted: bool,     // CPU is halted waiting for interrupt
     pub halt_bug: bool, // HALT bug: PC doesn't increment after HALT when IME=0 and interrupt pending
+    #[cfg(debug_assertions)]
+    instruction_m_cycles_ticked: u32, // Debug: Track M-cycles ticked during current instruction
 }
 
 #[derive(Clone, Copy)]
@@ -216,11 +218,19 @@ impl Cpu {
             ei_pending: false,
             halted: false,
             halt_bug: false,
+            #[cfg(debug_assertions)]
+            instruction_m_cycles_ticked: 0,
         }
     }
 
     /// Execute one instruction and return cycles taken
     pub fn step(&mut self, mem: &mut Memory) -> u32 {
+        // Reset instruction cycle counter for debug verification
+        #[cfg(debug_assertions)]
+        {
+            self.instruction_m_cycles_ticked = 0;
+        }
+
         // If CPU is halted, check if we should exit halt
         if self.halted {
             // Check if any interrupt is pending (regardless of IME)
@@ -231,14 +241,15 @@ impl Cpu {
                 self.halted = false;
             } else {
                 // Still halted, consume 4 cycles and return
+                mem.tick_components(1); // Tick 1 M-cycle even when halted
                 return 4;
             }
         }
 
         let pc = self.registers.read_r16(PC);
 
+        // Fetch opcode - don't tick here, instructions handle their full timing including fetch
         let opcode = mem.read_8(pc);
-
 
         self.execute(opcode, mem);
         let cycles = self.handle_post_instruction(mem, opcode, 0);
@@ -252,34 +263,118 @@ impl Cpu {
         cycles
     }
 
+    // Memory access helpers that tick timer/PPU on each access (1 M-cycle per access)
+    // This provides instruction-internal memory-access-level timing
+
+    fn read_byte_tick(&mut self, mem: &mut Memory, addr: u16) -> u8 {
+        let value = mem.read_8(addr);
+        mem.tick_components(1); // 1 M-cycle per memory read
+        #[cfg(debug_assertions)]
+        {
+            self.instruction_m_cycles_ticked += 1;
+        }
+        value
+    }
+
+    fn write_byte_tick(&mut self, mem: &mut Memory, addr: u16, value: u8) {
+        mem.write_8(addr, value);
+        mem.tick_components(1); // 1 M-cycle per memory write
+        #[cfg(debug_assertions)]
+        {
+            self.instruction_m_cycles_ticked += 1;
+        }
+    }
+
+    fn read_word_tick(&mut self, mem: &mut Memory, addr: u16) -> u16 {
+        let lo = self.read_byte_tick(mem, addr);
+        let hi = self.read_byte_tick(mem, addr + 1);
+        u16::from_le_bytes([lo, hi])
+    }
+
+    fn write_word_tick(&mut self, mem: &mut Memory, addr: u16, value: u16) {
+        self.write_byte_tick(mem, addr, (value & 0xFF) as u8);
+        self.write_byte_tick(mem, addr + 1, (value >> 8) as u8);
+    }
+
+    // Tick for internal CPU operations (ALU, etc.) that don't access memory
+    fn tick_internal(&mut self, mem: &mut Memory, m_cycles: u32) {
+        mem.tick_components(m_cycles);
+        #[cfg(debug_assertions)]
+        {
+            self.instruction_m_cycles_ticked += m_cycles;
+        }
+    }
+
     fn ld_r16_nn(&mut self, mem: &mut Memory, reg: Reg16) {
-        let value = mem.read_16(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles (read immediate word)
+        self.tick_internal(mem, 1); // 1 additional M-cycle for 16-bit load
         self.registers.write_r16(reg, value);
     }
 
     fn ld_r8_n(&mut self, mem: &mut Memory, reg: Reg8) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // Internal cycle
         self.registers.write_r8(reg, value);
     }
 
     fn ld_operand(&mut self, mem: &mut Memory, dest: Operand, source: Operand) {
-        let value = self.read_operand(mem, source);
-        self.write_operand(mem, dest, value);
+        // Check if source involves memory access
+        let needs_mem_read = matches!(source, Operand::MemHL | Operand::MemBC | Operand::MemDE);
+        let needs_mem_write = matches!(dest, Operand::MemHL | Operand::MemBC | Operand::MemDE);
+
+        let value = if needs_mem_read {
+            let addr = match source {
+                Operand::MemHL => self.registers.read_r16(HL),
+                Operand::MemBC => self.registers.read_r16(BC),
+                Operand::MemDE => self.registers.read_r16(DE),
+                _ => unreachable!(),
+            };
+            self.read_byte_tick(mem, addr) // Ticks 1 M-cycle (memory read)
+        } else {
+            self.tick_internal(mem, 1); // Register-to-register: 1 M-cycle
+            self.read_operand(mem, source)
+        };
+
+        if needs_mem_write {
+            let addr = match dest {
+                Operand::MemHL => self.registers.read_r16(HL),
+                Operand::MemBC => self.registers.read_r16(BC),
+                Operand::MemDE => self.registers.read_r16(DE),
+                _ => unreachable!(),
+            };
+            self.write_byte_tick(mem, addr, value); // Ticks 1 M-cycle (memory write)
+        } else {
+            // Writing to register - for memory-to-register, need 1 additional M-cycle
+            if needs_mem_read {
+                self.tick_internal(mem, 1); // 1 M-cycle for memory-to-register (total 2)
+            }
+            self.write_operand(mem, dest, value);
+        }
     }
 
     fn ld_nn_a(&mut self, mem: &mut Memory) {
+        let pc = self.registers.read_r16(PC);
+        let addr = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles (read nn)
         let value = self.registers.read_r8(A);
-        mem.write_8(mem.read_16(self.registers.read_r16(PC) + 1), value);
+        self.write_byte_tick(mem, addr, value); // Ticks 1 M-cycle (write to (nn))
+        self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 4)
     }
 
     fn ld_m_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
-        mem.write_8(self.registers.read_r16(HL), value);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle (read immediate n)
+        let addr = self.registers.read_r16(HL);
+        self.write_byte_tick(mem, addr, value); // Ticks 1 M-cycle (write to (HL))
+        self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 3)
     }
 
     fn ld_sp_e(&mut self, mem: &mut Memory) {
         // Opcode 0xF8: LD HL, SP+e - Load SP + signed offset into HL
-        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+        let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1) as i8; // Ticks 1 M-cycle
+        self.tick_internal(mem, 2); // 2 internal cycles for calculation
         let sp = self.registers.read_r16(SP);
         let result = sp.wrapping_add(offset as i16 as u16);
         self.registers.write_r16(HL, result);
@@ -301,58 +396,68 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn ld_sp_hl(&mut self, _mem: &mut Memory) {
+    fn ld_sp_hl(&mut self, mem: &mut Memory) {
         // Opcode 0xF9: LD SP, HL - Copy HL to SP
+        self.tick_internal(mem, 2); // 2 M-cycles for 16-bit register transfer
         let value = self.registers.read_r16(HL);
         self.registers.write_r16(SP, value);
     }
 
     fn ld_nn_sp(&mut self, mem: &mut Memory) {
-        // Opcode 0x08: LD (nn), SP - Store SP at memory address nn
-        let addr = mem.read_16(self.registers.read_r16(PC) + 1);
+        // Opcode 0x08: LD (nn), SP - Store SP at memory address nn - 20 T-cycles (5 M-cycles)
+        let pc = self.registers.read_r16(PC);
+        let addr = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles (read nn)
         let sp = self.registers.read_r16(SP);
-        mem.write_16(addr, sp);
+        self.write_word_tick(mem, addr, sp); // Ticks 2 M-cycles (write SP to (nn))
+        self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 5)
     }
 
     fn ldh_n_a(&mut self, mem: &mut Memory) {
+        let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle (read n)
         let value = self.registers.read_r8(A);
-        mem.write_8(
-            0xFF00 + mem.read_8(self.registers.read_r16(PC) + 1) as u16,
-            value,
-        );
+        self.write_byte_tick(mem, 0xFF00 + offset as u16, value); // Ticks 1 M-cycle (write to FF00+n)
+        self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 3)
     }
 
     fn ldh_a_n(&mut self, mem: &mut Memory) {
-        let offset = mem.read_8(self.registers.read_r16(PC) + 1);
-        let value = mem.read_8(0xFF00 + offset as u16);
+        let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle (read n)
+        let value = self.read_byte_tick(mem, 0xFF00 + offset as u16); // Ticks 1 M-cycle (read from FF00+n)
+        self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 3)
         self.registers.write_r8(A, value);
     }
 
     fn ldh_c_a(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // Internal cycle
         let value = self.registers.read_r8(A);
-        mem.write_8(0xFF00 + self.registers.read_r8(C) as u16, value);
+        self.write_byte_tick(mem, 0xFF00 + self.registers.read_r8(C) as u16, value); // Ticks 1 M-cycle
     }
 
     fn ldh_a_c(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(0xFF00 + (self.registers.read_r8(C) as u16));
+        self.tick_internal(mem, 1); // Internal cycle
+        let value = self.read_byte_tick(mem, 0xFF00 + (self.registers.read_r8(C) as u16)); // Ticks 1 M-cycle
         self.registers.write_r8(A, value);
     }
 
     fn pop(&mut self, mem: &mut Memory, reg: Reg16) {
-        let value = mem.read_16(self.registers.read_r16(SP));
-        self.registers.write_r16(reg, value);
         let sp = self.registers.read_r16(SP);
-        self.registers.write_r16(SP, sp + 2);
+        let value = self.read_word_tick(mem, sp); // Ticks 2 M-cycles for reading from stack
+        self.tick_internal(mem, 1); // 1 internal cycle (total 3)
+        self.registers.write_r16(reg, value);
+        self.registers.write_r16(SP, sp.wrapping_add(2));
     }
 
     fn push(&mut self, mem: &mut Memory, reg: Reg16) {
         let value = self.registers.read_r16(reg);
+        self.tick_internal(mem, 2); // 2 internal cycles for preparing push
         let sp = self.registers.read_r16(SP);
-        self.registers.write_r16(SP, sp - 2);
-        mem.write_16(self.registers.read_r16(SP), value);
+        self.registers.write_r16(SP, sp.wrapping_sub(2));
+        self.write_word_tick(mem, sp.wrapping_sub(2), value); // Ticks 2 M-cycles for writing to stack (total 4)
     }
 
-    fn inc_r8(&mut self, reg: Reg8) {
+    fn inc_r8(&mut self, mem: &mut Memory, reg: Reg8) {
+        self.tick_internal(mem, 1); // 1 M-cycle for 8-bit ALU operation
         let value = self.registers.read_r8(reg);
         let result = value.wrapping_add(1);
         self.registers.write_r8(reg, result);
@@ -368,12 +473,14 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn inc_r16(&mut self, reg: Reg16) {
+    fn inc_r16(&mut self, mem: &mut Memory, reg: Reg16) {
+        self.tick_internal(mem, 2); // 2 M-cycles for 16-bit operation
         let value = self.registers.read_r16(reg);
         self.registers.write_r16(reg, value.wrapping_add(1));
     }
 
-    fn dec_r8(&mut self, reg: Reg8) {
+    fn dec_r8(&mut self, mem: &mut Memory, reg: Reg8) {
+        self.tick_internal(mem, 1); // 1 M-cycle for 8-bit ALU operation
         let value = self.registers.read_r8(reg);
         let result = value.wrapping_sub(1);
         self.registers.write_r8(reg, result);
@@ -390,16 +497,18 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn dec_r16(&mut self, reg: Reg16) {
+    fn dec_r16(&mut self, mem: &mut Memory, reg: Reg16) {
+        self.tick_internal(mem, 2); // 2 M-cycles for 16-bit operation
         let value = self.registers.read_r16(reg);
         self.registers.write_r16(reg, value.wrapping_sub(1));
     }
 
     fn inc_mem(&mut self, mem: &mut Memory, reg: Reg16) {
         let addr = self.registers.read_r16(reg);
-        let value = mem.read_8(addr);
+        let value = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle (read)
         let result = value.wrapping_add(1);
-        mem.write_8(addr, result);
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
+        self.write_byte_tick(mem, addr, result); // Ticks 1 M-cycle (write) - total 3
 
         let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | SUBTRACT_FLAG | HALF_CARRY_FLAG);
@@ -414,9 +523,10 @@ impl Cpu {
 
     fn dec_mem(&mut self, mem: &mut Memory, reg: Reg16) {
         let addr = self.registers.read_r16(reg);
-        let value = mem.read_8(addr);
+        let value = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle (read)
         let result = value.wrapping_sub(1);
-        mem.write_8(addr, result);
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
+        self.write_byte_tick(mem, addr, result); // Ticks 1 M-cycle (write) - total 3
 
         let mut flags = self.registers.read_r8(F);
         flags &= !(ZERO_FLAG | HALF_CARRY_FLAG);
@@ -430,7 +540,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn rlca(&mut self) {
+    fn rlca(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let value = self.registers.read_r8(A);
         let msb = value & 0x80;
         let new_value = (value << 1) | (msb >> 7);
@@ -445,7 +556,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn rla(&mut self) {
+    fn rla(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let value = self.registers.read_r8(A);
         let msb = value & 0x80;
         let new_value = (value << 1) | ((self.registers.read_r8(F) & CARRY_FLAG) >> 4);
@@ -458,7 +570,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn rrca(&mut self) {
+    fn rrca(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let value = self.registers.read_r8(A);
         let lsb = value & 0x01;
         let new_value = (value >> 1) | (lsb << 7);
@@ -474,7 +587,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn rra(&mut self, _mem: &mut Memory) {
+    fn rra(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let value = self.registers.read_r8(A);
         let lsb = value & 0x01;
         let new_value = (value >> 1) | ((self.registers.read_r8(F) & CARRY_FLAG) << 3);
@@ -491,7 +605,8 @@ impl Cpu {
     }
 
     //arithmetic and logic
-    fn add_hl(&mut self, reg: Reg16) {
+    fn add_hl(&mut self, mem: &mut Memory, reg: Reg16) {
+        self.tick_internal(mem, 2); // 2 M-cycles for 16-bit ADD
         let value = self.registers.read_r16(reg);
         let hl = self.registers.read_r16(HL);
         let result: u32 = value as u32 + hl as u32;
@@ -511,7 +626,16 @@ impl Cpu {
     }
 
     fn add_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let result: u16 = value as u16 + a as u16;
         self.registers.write_r8(A, result as u8);
@@ -534,7 +658,9 @@ impl Cpu {
     }
 
     fn add_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let result: u16 = value as u16 + a as u16;
         self.registers.write_r8(A, result as u8);
@@ -558,7 +684,9 @@ impl Cpu {
 
     fn add_sp_e(&mut self, mem: &mut Memory) {
         // Opcode 0xE8: ADD SP, e - Add signed offset to SP
-        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
+        let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1) as i8; // Ticks 1 M-cycle
+        self.tick_internal(mem, 3); // 3 internal M-cycles for SP arithmetic
         let sp = self.registers.read_r16(SP);
         let result = sp.wrapping_add(offset as i16 as u16);
         self.registers.write_r16(SP, result);
@@ -581,7 +709,16 @@ impl Cpu {
     }
 
     fn adc_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let carry = (self.registers.read_r8(F) & CARRY_FLAG) >> 4;
 
@@ -606,7 +743,9 @@ impl Cpu {
     }
 
     fn adc_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let carry = (self.registers.read_r8(F) & CARRY_FLAG) >> 4;
 
@@ -631,7 +770,16 @@ impl Cpu {
     }
 
     fn sub_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let result = a.wrapping_sub(value);
         self.registers.write_r8(A, result);
@@ -661,7 +809,9 @@ impl Cpu {
     }
 
     fn sub_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let result = a.wrapping_sub(value);
         self.registers.write_r8(A, result);
@@ -691,7 +841,16 @@ impl Cpu {
     }
 
     fn sbc_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let carry_in = if (self.registers.read_r8(F) & CARRY_FLAG) != 0 {
             1u8
@@ -731,7 +890,9 @@ impl Cpu {
     }
 
     fn sbc_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let carry_in = if (self.registers.read_r8(F) & CARRY_FLAG) != 0 {
             1u8
@@ -770,7 +931,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn daa(&mut self, _mem: &mut Memory) {
+    fn daa(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for DAA operation
         let mut value = self.registers.read_r8(A);
         let flags = self.registers.read_r8(F);
         let mut new_flags = flags;
@@ -815,7 +977,8 @@ impl Cpu {
         self.registers.write_r8(A, value);
     }
 
-    fn cpl(&mut self) {
+    fn cpl(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for CPL operation
         let value = self.registers.read_r8(A);
         self.registers.write_r8(A, !value);
         let mut flags = self.registers.read_r8(F);
@@ -824,7 +987,16 @@ impl Cpu {
     }
 
     fn and_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let result = a & value;
         self.registers.write_r8(A, result);
@@ -844,7 +1016,9 @@ impl Cpu {
     }
 
     fn and_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let result = a & value;
         self.registers.write_r8(A, result);
@@ -864,7 +1038,16 @@ impl Cpu {
     }
 
     fn xor_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let result = a ^ value;
         self.registers.write_r8(A, result);
@@ -884,7 +1067,9 @@ impl Cpu {
     }
 
     fn xor_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let result = a ^ value;
         self.registers.write_r8(A, result);
@@ -904,7 +1089,16 @@ impl Cpu {
     }
 
     fn or_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
         let result = a | value;
         self.registers.write_r8(A, result);
@@ -924,7 +1118,9 @@ impl Cpu {
     }
 
     fn or_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
         let result = a | value;
         self.registers.write_r8(A, result);
@@ -943,7 +1139,16 @@ impl Cpu {
     }
 
     fn cp_a_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            let v = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle for memory access
+            self.tick_internal(mem, 1); // 1 M-cycle for ALU operation on memory (total 2)
+            v
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op)
+        };
+
         let a = self.registers.read_r8(A);
 
         // Clear all flags first, then set as needed
@@ -971,7 +1176,9 @@ impl Cpu {
     }
 
     pub fn cp_a_n(&mut self, mem: &mut Memory) {
-        let value = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let value = self.read_byte_tick(mem, pc + 1); // Ticks 1 M-cycle
+        self.tick_internal(mem, 1); // 1 M-cycle for ALU operation
         let a = self.registers.read_r8(A);
 
         // Clear all flags first, then set as needed
@@ -1023,14 +1230,18 @@ impl Cpu {
 
 
     //misc
-    fn nop(&mut self) {}
+    fn nop(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for NOP
+    }
 
-    fn stop(&mut self) {
+    fn stop(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for STOP
         //stop Cpu until button pressed
     }
 
-    fn halt(&mut self, mem: &Memory) {
+    fn halt(&mut self, mem: &mut Memory) {
         // HALT: Stop CPU until interrupt occurs
+        self.tick_internal(mem, 1); // HALT consumes 1 M-cycle (4 T-cycles)
         // HALT bug: If IME=0 and an interrupt is pending, don't halt
         // but set halt_bug flag to prevent PC increment after next instruction
         //not sure if this is completetly correct I should check the pandocs again
@@ -1045,9 +1256,11 @@ impl Cpu {
             // Normal HALT behavior
             self.halted = true;
         }
+        // Note: HALT timing is handled specially - it just stops the CPU
     }
 
-    fn scf(&mut self) {
+    fn scf(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for flag operation
         let mut flags = self.registers.read_r8(F);
         flags |= CARRY_FLAG;
         flags &= !HALF_CARRY_FLAG;
@@ -1055,7 +1268,8 @@ impl Cpu {
         self.registers.write_r8(F, flags);
     }
 
-    fn ccf(&mut self) {
+    fn ccf(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for flag operation
         let mut flags = self.registers.read_r8(F);
         flags ^= CARRY_FLAG;
         flags &= !HALF_CARRY_FLAG;
@@ -1065,7 +1279,8 @@ impl Cpu {
 
     //cb instructions
     fn rlc_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
@@ -1083,11 +1298,16 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
+
+
     fn rrc_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
@@ -1105,11 +1325,14 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn rl_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         let mut carry = 0;
@@ -1131,11 +1354,14 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn rr_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         let mut carry = 0;
@@ -1157,11 +1383,21 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn sla_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op) as i8;
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1);
+            self.read_byte_tick(mem, addr) as i8 // Ticks 1 M-cycle
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op) as i8
+        };
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
@@ -1179,11 +1415,27 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result as u8);
+
+        if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1);
+            self.write_byte_tick(mem, addr, result as u8); // Ticks 1 M-cycle
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for result write
+            self.write_operand(mem, op, result as u8);
+        }
     }
 
     fn sra_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op) as i8;
+        let value = if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1);
+            self.read_byte_tick(mem, addr) as i8 // Ticks 1 M-cycle
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for register operation
+            self.read_operand(mem, op) as i8
+        };
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
@@ -1201,11 +1453,20 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result as u8);
+
+        if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1);
+            self.write_byte_tick(mem, addr, result as u8); // Ticks 1 M-cycle
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for result write
+            self.write_operand(mem, op, result as u8);
+        }
     }
 
     fn swap_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !(CARRY_FLAG | HALF_CARRY_FLAG | SUBTRACT_FLAG | ZERO_FLAG);
@@ -1215,11 +1476,16 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn bit_n_r(&mut self, mem: &mut Memory, op: Operand, n: u8) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
+        self.tick_internal(mem, 1); // 1 additional M-cycle for BIT operation
+
         let mut flags = self.registers.read_r8(F);
 
         flags |= HALF_CARRY_FLAG;
@@ -1234,7 +1500,8 @@ impl Cpu {
     }
 
     fn srl_r(&mut self, mem: &mut Memory, op: Operand) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let mut flags = self.registers.read_r8(F);
 
         flags &= !CARRY_FLAG;
@@ -1252,23 +1519,54 @@ impl Cpu {
             flags |= ZERO_FLAG;
         }
         self.registers.write_r8(F, flags);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn res_n_r(&mut self, mem: &mut Memory, op: Operand, n: u8) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let result = value & !(1 << n);
-        self.write_operand(mem, op, result);
+
+                self.write_op_cb(mem, op, result);
+
     }
 
     fn set_n_r(&mut self, mem: &mut Memory, op: Operand, n: u8) {
-        let value = self.read_operand(mem, op);
+        let value = self.read_op_cb(mem, op);
+
         let result = value | (1 << n);
-        self.write_operand(mem, op, result);
+
+        self.write_op_cb(mem, op, result);
+    }
+
+    fn write_op_cb(&mut self, mem: &mut Memory, op: Operand, result: u8) {
+        if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1);
+            self.write_byte_tick(mem, addr, result); // Ticks 1 M-cycle
+        } else {
+            self.tick_internal(mem, 1); // 1 M-cycle for result write
+            self.write_operand(mem, op, result);
+        }
+    }
+    fn read_op_cb(&mut self, mem: &mut Memory, op: Operand) -> u8 {
+        if matches!(op, Operand::MemHL) {
+            let addr = self.registers.read_r16(HL);
+            self.tick_internal(mem, 1); //TODO this is probably wrong
+            self.read_byte_tick(mem, addr) // Ticks 1 M-cycle
+
+        } else {
+            self.tick_internal(mem, 1); // TODO this is really the fetch cycle, why did I thought it was for something else I'm too tired same for write_op_cb and for much of the other operations
+            self.read_operand(mem, op)
+        }
+
     }
 
     fn call_cb(&mut self, mem: &mut Memory) {
-        let cb_opcode = mem.read_8(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let cb_opcode = mem.read_8(pc + 1); // Don't tick - reading instruction byte
         let op = Operand::from_index(cb_opcode & 0x07);
 
         match cb_opcode {
@@ -1295,20 +1593,23 @@ impl Cpu {
         }
     }
 
-    fn di(&mut self) {
+    fn di(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for DI
         self.registers.write_ime(0);
         self.ei_pending = false; // Cancel any pending EI
     }
 
-    fn ei(&mut self) {
+    fn ei(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for EI
         // EI enables interrupts after the NEXT instruction executes
         self.ei_pending = true;
     }
 
     //flow
     fn jr_e(&mut self, mem: &mut Memory) {
-        let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
         let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1) as i8; // Ticks 1 M-cycle
+        self.tick_internal(mem, 2); // 2 internal M-cycles for jump
         // Jump relative to PC+2 (after the JR instruction which is 2 bytes)
         let target = (pc as i32 + 2 + offset as i32) as u16;
         self.registers.write_r16(PC, target);
@@ -1328,21 +1629,25 @@ impl Cpu {
 
         let cond = if z { 1 } else { 0 };
 
+        let pc = self.registers.read_r16(PC);
+        let offset = self.read_byte_tick(mem, pc + 1) as i8; // Ticks 1 M-cycle
+
         if (self.registers.read_r8(F) & flag) >> shift == cond {
             // Condition met - take the jump
-            let offset = mem.read_8(self.registers.read_r16(PC) + 1) as i8;
-            let pc = self.registers.read_r16(PC);
+            self.tick_internal(mem, 2); // 2 internal M-cycles for jump
             let target = (pc as i32 + 2 + offset as i32) as u16;
             self.registers.write_r16(PC, target);
         } else {
             // Condition not met - skip to next instruction (PC+2)
-            let pc = self.registers.read_r16(PC);
+            self.tick_internal(mem, 1); // 1 internal M-cycle
             self.registers.write_r16(PC, pc + 2);
         }
     }
 
     fn jp_nn(&mut self, mem: &mut Memory) {
-        let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+        let pc = self.registers.read_r16(PC);
+        let target_address = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles
+        self.tick_internal(mem, 2); // 2 internal M-cycles for jump
         self.registers.write_r16(PC, target_address);
     }
 
@@ -1361,29 +1666,37 @@ impl Cpu {
 
         let cond = if condition { 1 } else { 0 };
 
+        let pc = self.registers.read_r16(PC);
+        let target_address = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles
+
         if (self.registers.read_r8(F) & flag) >> shift == cond {
-            let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
+            self.tick_internal(mem, 2); // 2 internal M-cycles for jump
             self.registers.write_r16(PC, target_address);
         } else {
-            let pc = self.registers.read_r16(PC);
+            self.tick_internal(mem, 1); // 1 internal M-cycle
             self.registers.write_r16(PC, pc + 3);
         }
     }
 
-    fn jp_hl(&mut self) {
+    fn jp_hl(&mut self, mem: &mut Memory) {
+        self.tick_internal(mem, 1); // 1 M-cycle for jump
         self.registers.write_r16(PC, self.registers.read_r16(HL));
     }
 
     fn call_nn(&mut self, mem: &mut Memory) {
-        let target_address = mem.read_16(self.registers.read_r16(PC) + 1);
-        let return_address = self.registers.read_r16(PC) + 3; // Return to instruction after CALL
+        let pc = self.registers.read_r16(PC);
+        let target_address = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles for reading address
+        let return_address = pc.wrapping_add(3); // Return to instruction after CALL
+
+        self.tick_internal(mem, 1); // Internal cycle for preparing stack operation
 
         // Push return address onto stack
-        self.registers
-            .write_r16(SP, self.registers.read_r16(SP) - 2);
-        mem.write_16(self.registers.read_r16(SP), return_address);
+        let sp = self.registers.read_r16(SP);
+        self.registers.write_r16(SP, sp.wrapping_sub(2));
+        self.write_word_tick(mem, sp.wrapping_sub(2), return_address); // Ticks 2 M-cycles for writing to stack
 
         // Jump to target address
+        self.tick_internal(mem, 1); // Internal cycle for jump
         self.registers.write_r16(PC, target_address);
     }
 
@@ -1413,29 +1726,35 @@ impl Cpu {
 
             // Jump to target address
             self.registers.write_r16(PC, target_address);
+            self.tick_internal(mem, 6);
         } else {
             // Condition not met - skip to next instruction (PC+3)
             let pc = self.registers.read_r16(PC);
             self.registers.write_r16(PC, pc + 3);
+            self.tick_internal(mem, 3);
         }
     }
 
     fn rst(&mut self, mem: &mut Memory, value: u16) {
-        let return_address = self.registers.read_r16(PC) + 1; // RST is 1 byte
+        let return_address = self.registers.read_r16(PC).wrapping_add(1); // RST is 1 byte
+
+        self.tick_internal(mem, 1); // Internal cycle for preparing stack operation
 
         // Push return address onto stack
         let sp = self.registers.read_r16(SP);
         self.registers.write_r16(SP, sp.wrapping_sub(2));
-        mem.write_16(self.registers.read_r16(SP), return_address);
+        self.write_word_tick(mem, sp.wrapping_sub(2), return_address); // Ticks 2 M-cycles
 
         // Jump to RST vector
+        self.tick_internal(mem, 1); // Internal cycle for jump
         self.registers.write_r16(PC, value);
     }
 
     fn ret(&mut self, mem: &mut Memory) {
-        let value = mem.read_16(self.registers.clone().read_r16(SP));
-        self.registers
-            .write_r16(SP, self.registers.clone().read_r16(SP) + 2);
+        let sp = self.registers.read_r16(SP);
+        let value = self.read_word_tick(mem, sp); // Ticks 2 M-cycles for reading from stack
+        self.registers.write_r16(SP, sp.wrapping_add(2));
+        self.tick_internal(mem, 2); // 2 internal cycles for jump (total 4)
         self.registers.write_r16(PC, value);
     }
 
@@ -1454,106 +1773,129 @@ impl Cpu {
 
         let cond = if z { 1 } else { 0 };
 
+        self.tick_internal(mem, 1); // Internal cycle for condition check
+
         if (self.registers.read_r8(F) & flag) >> shift == cond {
             // Condition met - perform return
-            let value = mem.read_16(self.registers.read_r16(SP));
-            self.registers
-                .write_r16(SP, self.registers.read_r16(SP) + 2);
+            let sp = self.registers.read_r16(SP);
+            let value = self.read_word_tick(mem, sp); // Ticks 2 M-cycles
+            self.registers.write_r16(SP, sp.wrapping_add(2));
+            self.tick_internal(mem, 1); // Internal cycle for jump
             self.registers.write_r16(PC, value);
+            self.tick_internal(mem, 1);
         } else {
             // Condition not met - skip to next instruction (PC+1)
             let pc = self.registers.read_r16(PC);
             self.registers.write_r16(PC, pc + 1);
+            self.tick_internal(mem, 1);
         }
     }
 
     fn reti(&mut self, mem: &mut Memory) {
-        let value = mem.read_16(self.registers.read_r16(SP));
-        self.registers
-            .write_r16(SP, self.registers.read_r16(SP) + 2);
+        let sp = self.registers.read_r16(SP);
+        let value = self.read_word_tick(mem, sp); // Ticks 2 M-cycles
+        self.registers.write_r16(SP, sp.wrapping_add(2));
+        self.tick_internal(mem, 1); // Internal cycle for jump
         self.registers.write_r16(PC, value);
         self.registers.write_ime(1); // Re-enable interrupts
+        self.tick_internal(mem, 1);
     }
 
     //end of Cpu
     pub fn execute(&mut self, opcode: u8, mem: &mut Memory) {
         match opcode {
-            0x00 => self.nop(),
+            0x00 => self.nop(mem),
             0x01 => self.ld_r16_nn(mem, BC),
             0x02 => self.ld_operand(mem, Operand::MemBC, Operand::Reg8(A)),
-            0x03 => self.inc_r16(BC),
-            0x04 => self.inc_r8(B),
-            0x05 => self.dec_r8(B),
+            0x03 => self.inc_r16(mem, BC),
+            0x04 => self.inc_r8(mem, B),
+            0x05 => self.dec_r8(mem, B),
             0x06 => self.ld_r8_n(mem, B),
-            0x07 => self.rlca(),
+            0x07 => self.rlca(mem),
             0x08 => self.ld_nn_sp(mem),
-            0x09 => self.add_hl(BC),
+            0x09 => self.add_hl(mem, BC),
             0x0A => self.ld_operand(mem, Operand::Reg8(A), Operand::MemBC),
-            0x0B => self.dec_r16(BC),
-            0x0C => self.inc_r8(C),
-            0x0D => self.dec_r8(C),
+            0x0B => self.dec_r16(mem, BC),
+            0x0C => self.inc_r8(mem, C),
+            0x0D => self.dec_r8(mem, C),
             0x0E => self.ld_r8_n(mem, C),
-            0x0F => self.rrca(),
-            0x10 => self.stop(),
+            0x0F => self.rrca(mem),
+            0x10 => self.stop(mem),
             0x11 => self.ld_r16_nn(mem, DE),
             0x12 => self.ld_operand(mem, Operand::MemDE, Operand::Reg8(A)),
-            0x13 => self.inc_r16(DE),
-            0x14 => self.inc_r8(D),
-            0x15 => self.dec_r8(D),
+            0x13 => self.inc_r16(mem, DE),
+            0x14 => self.inc_r8(mem, D),
+            0x15 => self.dec_r8(mem, D),
             0x16 => self.ld_r8_n(mem, D),
-            0x17 => self.rla(),
+            0x17 => self.rla(mem),
             0x18 => self.jr_e(mem),
-            0x19 => self.add_hl(DE),
+            0x19 => self.add_hl(mem, DE),
             0x1A => self.ld_operand(mem, Operand::Reg8(A), Operand::MemDE),
-            0x1B => self.dec_r16(DE),
-            0x1C => self.inc_r8(E),
-            0x1D => self.dec_r8(E),
+            0x1B => self.dec_r16(mem, DE),
+            0x1C => self.inc_r8(mem, E),
+            0x1D => self.dec_r8(mem, E),
             0x1E => self.ld_r8_n(mem, E),
             0x1F => self.rra(mem),
             0x20 => self.jr_f_e(mem, 'z', false),
             0x21 => self.ld_r16_nn(mem, HL),
             0x22 => {
-                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(A));
-                self.inc_r16(HL);
+                // LD (HL+),A - 8 T-cycles (2 M-cycles total)
+                let addr = self.registers.read_r16(HL);
+                let value = self.registers.read_r8(A);
+                self.write_byte_tick(mem, addr, value); // 1 M-cycle for memory write
+                self.tick_internal(mem, 1); // 1 M-cycle for increment (total 2)
+                self.registers.write_r16(HL, addr.wrapping_add(1));
             }
-            0x23 => self.inc_r16(HL),
-            0x24 => self.inc_r8(H),
-            0x25 => self.dec_r8(H),
+            0x23 => self.inc_r16(mem, HL),
+            0x24 => self.inc_r8(mem, H),
+            0x25 => self.dec_r8(mem, H),
             0x26 => self.ld_r8_n(mem, H),
             0x27 => self.daa(mem),
             0x28 => self.jr_f_e(mem, 'z', true),
-            0x29 => self.add_hl(HL),
+            0x29 => self.add_hl(mem, HL),
             0x2A => {
-                self.ld_operand(mem, Operand::Reg8(A), Operand::MemHL);
-                self.inc_r16(HL);
+                // LD A,(HL+) - 8 T-cycles (2 M-cycles total)
+                let addr = self.registers.read_r16(HL);
+                let value = self.read_byte_tick(mem, addr); // 1 M-cycle for memory read
+                self.tick_internal(mem, 1); // 1 M-cycle for increment (total 2)
+                self.registers.write_r8(A, value);
+                self.registers.write_r16(HL, addr.wrapping_add(1));
             }
-            0x2B => self.dec_r16(HL),
-            0x2C => self.inc_r8(L),
-            0x2D => self.dec_r8(L),
+            0x2B => self.dec_r16(mem, HL),
+            0x2C => self.inc_r8(mem, L),
+            0x2D => self.dec_r8(mem, L),
             0x2E => self.ld_r8_n(mem, L),
-            0x2F => self.cpl(),
+            0x2F => self.cpl(mem),
             0x30 => self.jr_f_e(mem, 'c', false),
             0x31 => self.ld_r16_nn(mem, SP),
             0x32 => {
-                self.ld_operand(mem, Operand::MemHL, Operand::Reg8(A));
-                self.dec_r16(HL);
+                // LD (HL-),A - 8 T-cycles (2 M-cycles total)
+                let addr = self.registers.read_r16(HL);
+                let value = self.registers.read_r8(A);
+                self.write_byte_tick(mem, addr, value); // 1 M-cycle for memory write
+                self.tick_internal(mem, 1); // 1 M-cycle for decrement (total 2)
+                self.registers.write_r16(HL, addr.wrapping_sub(1));
             }
-            0x33 => self.inc_r16(SP),
+            0x33 => self.inc_r16(mem, SP),
             0x34 => self.inc_mem(mem, HL),
             0x35 => self.dec_mem(mem, HL),
             0x36 => self.ld_m_n(mem),
-            0x37 => self.scf(),
+            0x37 => self.scf(mem),
             0x38 => self.jr_f_e(mem, 'c', true),
-            0x39 => self.add_hl(SP),
+            0x39 => self.add_hl(mem, SP),
             0x3A => {
-                self.ld_operand(mem, Operand::Reg8(A), Operand::MemHL);
-                self.dec_r16(HL);
+                // LD A,(HL-) - 8 T-cycles (2 M-cycles total)
+                let addr = self.registers.read_r16(HL);
+                let value = self.read_byte_tick(mem, addr); // 1 M-cycle for memory read
+                self.tick_internal(mem, 1); // 1 M-cycle for decrement (total 2)
+                self.registers.write_r8(A, value);
+                self.registers.write_r16(HL, addr.wrapping_sub(1));
             }
-            0x3B => self.dec_r16(SP),
-            0x3C => self.inc_r8(A),
-            0x3D => self.dec_r8(A),
+            0x3B => self.dec_r16(mem, SP),
+            0x3C => self.inc_r8(mem, A),
+            0x3D => self.dec_r8(mem, A),
             0x3E => self.ld_r8_n(mem, A),
-            0x3F => self.ccf(),
+            0x3F => self.ccf(mem),
             0x76 => self.halt(mem), // HALT instruction (not LD (HL),(HL))
             0x40..=0x75 | 0x77..=0x7F => {
                 // LD r1, r2 instructions (excluding 0x76 which is HALT)
@@ -1605,25 +1947,28 @@ impl Cpu {
             0xE6 => self.and_a_n(mem),
             0xE7 => self.rst(mem, 0x20),
             0xE8 => self.add_sp_e(mem),
-            0xE9 => self.jp_hl(),
+            0xE9 => self.jp_hl(mem),
             0xEA => self.ld_nn_a(mem),
             0xEE => self.xor_a_n(mem),
             0xEF => self.rst(mem, 0x28),
             0xF0 => self.ldh_a_n(mem),
             0xF1 => self.pop(mem, AF),
             0xF2 => self.ldh_a_c(mem),
-            0xF3 => self.di(),
+            0xF3 => self.di(mem),
             0xF5 => self.push(mem, AF),
             0xF6 => self.or_a_n(mem),
             0xF7 => self.rst(mem, 0x30),
             0xF8 => self.ld_sp_e(mem),
             0xF9 => self.ld_sp_hl(mem),
             0xFA => {
-                let addr = mem.read_16(self.registers.read_r16(PC) + 1);
-                let value = mem.read_8(addr);
+                // LD A,(nn) - 16 T-cycles (4 M-cycles)
+                let pc = self.registers.read_r16(PC);
+                let addr = self.read_word_tick(mem, pc + 1); // Ticks 2 M-cycles (read nn)
+                let value = self.read_byte_tick(mem, addr); // Ticks 1 M-cycle (read from (nn))
+                self.tick_internal(mem, 1); // 1 additional internal M-cycle (total 4)
                 self.registers.write_r8(A, value);
             }
-            0xFB => self.ei(),
+            0xFB => self.ei(mem),
             0xFE => self.cp_a_n(mem),
             0xFF => self.rst(mem, 0x38),
             _ => {
@@ -1674,6 +2019,50 @@ impl Cpu {
         if opcode == 0xCB {
             let cb_opcode = mem.read_8(self.registers.read_r16(PC) + 1);
             cycles = OPCODE_DURATION_CB[cb_opcode as usize];
+        }
+
+        // NOTE: All instructions now handle their own timing via ticking helpers
+        // We no longer do generic ticking here
+
+        // DEBUG: Verify that the actual M-cycles ticked matches the cycle table
+        #[cfg(debug_assertions)]
+        {
+            let expected_m_cycles = (cycles / 4) as u32; // Convert T-cycles to M-cycles
+            let actual_m_cycles = self.instruction_m_cycles_ticked;
+
+            // List of opcodes with variable cycle counts (conditional jumps/calls/returns)
+            // These can take fewer cycles than the table shows when condition is not met
+            let variable_cycle_opcodes = [
+                0x20, 0x28, 0x30, 0x38, // JR cc,e
+                0xC0, 0xC8, 0xD0, 0xD8, // RET cc
+                0xC2, 0xCA, 0xD2, 0xDA, // JP cc,nn
+                0xC4, 0xCC, 0xD4, 0xDC, // CALL cc,nn
+                0xCB
+            ];
+
+            let is_variable_cycle = variable_cycle_opcodes.contains(&opcode);
+            if !is_variable_cycle && actual_m_cycles != expected_m_cycles && opcode != 0xCB{
+                let cb_info = if opcode == 0xCB {
+                    let cb_opcode = mem.read_8(self.registers.read_r16(PC) + 1);
+                    format!(" (CB prefix, CB opcode: 0x{:02X})", cb_opcode)
+                } else {
+                    String::new()
+                };
+
+                panic!(
+                    "TIMING MISMATCH: Opcode 0x{:02X}{} expected {} M-cycles ({} T-cycles) but ticked {} M-cycles\n\
+                     This means the instruction implementation doesn't match OPCODE_DURATION table!",
+                    opcode, cb_info, expected_m_cycles, cycles, actual_m_cycles
+                );
+            } else if is_variable_cycle && actual_m_cycles > expected_m_cycles && opcode != 0xCB {
+                // For variable-cycle instructions, actual can be <= expected
+                // But it should never be MORE than expected
+                panic!(
+                    "TIMING MISMATCH: Variable-cycle opcode 0x{:02X} ticked {} M-cycles but max is {} M-cycles ({} T-cycles)\n\
+                     This means the instruction ticked more than the maximum allowed!",
+                    opcode, actual_m_cycles, expected_m_cycles, cycles
+                );
+            }
         }
 
         self.cycles += cycles as u64;
