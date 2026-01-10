@@ -2,7 +2,6 @@ use crate::joypad::Joypad;
 use crate::ppu::Ppu;
 use crate::serial::Serial;
 use crate::timer::Timer;
-use std::ptr::null_mut;
 
 type MainMemory = [u8; 0x10000];
 
@@ -33,7 +32,6 @@ impl Memory {
             main_memory: [0; 0x10000],
             rom: Rom {
                 buffer: [0; 0x2FFFF],
-                bank: null_mut(),
             },
             rom_loaded: false,
             current_rom_bank: 1,
@@ -59,7 +57,6 @@ impl Memory {
 #[derive(Clone, Copy)]
 pub struct Rom {
     pub buffer: [u8; 0x2FFFF],
-    pub bank: *mut u8,
 }
 
 impl Memory {
@@ -103,12 +100,11 @@ impl Memory {
 
         // Handle DMA cycles
         if self.dma_active {
-            if m_cycles >= self.dma_cycles_remaining as u32 {
+            if self.dma_cycles_remaining > (m_cycles) as u16 {
+                self.dma_cycles_remaining -= (m_cycles) as u16;
+            } else {
                 self.dma_cycles_remaining = 0;
                 self.dma_active = false;
-            } else {
-                self.dma_cycles_remaining =
-                    self.dma_cycles_remaining.wrapping_sub(m_cycles as u16);
             }
         }
     }
@@ -143,8 +139,8 @@ impl Memory {
         if address == 0xFF46 {
             let source = (value as u16) << 8;
             self.dma_active = true;
-            // DMA takes 160 * 4 machine cycles on DMG (approx 640 cycles)
-            self.dma_cycles_remaining = 160 * 4;
+            // DMA takes 160  machine cycles on DMG (approx 160 cycles)
+            self.dma_cycles_remaining = 160;
             self.dma_source = source;
 
             // Immediate copy of 160 bytes into OAM (FE00..FE9F)

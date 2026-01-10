@@ -98,11 +98,11 @@ fn main() {
     // FPS counter
     let mut fps_counter = 0u32;
     let mut fps_timer = Instant::now();
-    let mut current_fps ;
+    let mut current_fps;
 
     // Dynamic estimate for presentation time (exponential moving average)
     let mut estimated_present_time = Duration::from_micros(0);
-    const PRESENT_TIME_ALPHA: f64 = 0.1; // Smoothing factor for EMA
+    const PRESENT_TIME_ALPHA: f64 = 0.2; // Smoothing factor for EMA
 
     // Serial forwarding state (mirror final_test harness)
     let mut last_serial_len: usize = 0;
@@ -136,18 +136,18 @@ fn main() {
             let delta_cycles = cpu.step(&mut mem);
             cycles += delta_cycles;
 
-            // NOTE: Timer/PPU ticking now happens INSIDE instructions via tick_components()
-            // We no longer tick here to avoid double-ticking
-            // DMA still needs to be progressed based on cycles
-            if mem.dma_active {
-                let m_cycles = (delta_cycles ) as u16;
+            /*if mem.dma_active {
+                let m_cycles = (delta_cycles) as u16;
                 if mem.dma_cycles_remaining > m_cycles {
                     mem.dma_cycles_remaining -= m_cycles;
                 } else {
                     mem.dma_cycles_remaining = 0;
                     mem.dma_active = false;
                 }
-            }
+            }*/
+            // NOTE: Timer/PPU ticking now happens INSIDE instructions via tick_components()
+            // We no longer tick here to avoid double-ticking
+            // DMA still needs to be progressed based on cycles
 
             cpu.handle_interrupts(&mut mem);
 
@@ -181,14 +181,18 @@ fn main() {
             fps_timer = Instant::now();
 
             // Update window title with FPS
-            canvas.window_mut().set_title(&format!("Game Boy Emulator - {} FPS", current_fps))
+            canvas
+                .window_mut()
+                .set_title(&format!("Game Boy Emulator - {} FPS", current_fps))
                 .expect("Failed to set window title");
         }
 
         // Frame timing with dynamic presentation time estimate
         // Calculate sleep time accounting for estimated present() duration
         let frame_time = last_frame.elapsed();
-        let target_sleep = frame_duration.saturating_sub(frame_time).saturating_sub(estimated_present_time);
+        let target_sleep = frame_duration
+            .saturating_sub(frame_time)
+            .saturating_sub(estimated_present_time);
 
         if target_sleep > Duration::from_micros(100) {
             std::thread::sleep(target_sleep);
@@ -199,7 +203,6 @@ fn main() {
         canvas.present();
         let actual_present_time = present_start.elapsed();
 
-        // Update exponential moving average of present time
         let new_estimate_micros = (PRESENT_TIME_ALPHA * actual_present_time.as_micros() as f64)
             + ((1.0 - PRESENT_TIME_ALPHA) * estimated_present_time.as_micros() as f64);
         estimated_present_time = Duration::from_micros(new_estimate_micros as u64);
